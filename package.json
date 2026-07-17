@@ -9,7 +9,10 @@
   "scripts": {
     "start": "bun src/cli/index.ts",
     "test": "bun test",
-    "bench": "bun bench/bench.ts"
+    "bench": "bun bench/bench.ts",
+    "ui:install": "bun install --cwd frontend",
+    "ui:build": "bun run --cwd frontend build",
+    "ui:dev": "bun run --cwd frontend dev"
   },
   "devDependencies": {
     "@types/bun": "^1.1.0"

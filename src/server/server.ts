@@ -44,7 +44,8 @@ export interface DaemonOptions {
   port?: number;
 }
 
-const UI_PATH = path.join(import.meta.dir, "..", "..", "public", "index.html");
+const PUBLIC_DIR = path.join(import.meta.dir, "..", "..", "public");
+const UI_PATH = path.join(PUBLIC_DIR, "index.html");
 const TTL_CHECK_MS = 60_000;
 
 interface JsonBody {
@@ -218,6 +219,20 @@ export class Daemon {
       return new Response(Bun.file(UI_PATH), {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
+    }
+
+    // Built frontend assets (Vite emits content-hashed files under /assets/).
+    if (method === "GET" && pathname.startsWith("/assets/")) {
+      const rel = path.normalize(decodeURIComponent(pathname)).replace(/^[/\\]+/, "");
+      if (rel.startsWith("assets" + path.sep)) {
+        const file = Bun.file(path.join(PUBLIC_DIR, rel));
+        if (await file.exists()) {
+          return new Response(file, {
+            headers: { "cache-control": "public, max-age=31536000, immutable" },
+          });
+        }
+      }
+      return json({ error: "not found" }, 404);
     }
 
     if (pathname === "/events") return this.hub.sseResponse(req.signal);
