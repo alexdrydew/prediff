@@ -1,0 +1,17 @@
+{
+  "name": "prediff",
+  "version": "0.1.0",
+  "description": "Fast local agent-first diff review tool",
+  "type": "module",
+  "bin": {
+    "prediff": "src/cli/index.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli/index.ts",
+    "test": "bun test",
+    "bench": "bun bench/bench.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0"
+  }
+}
