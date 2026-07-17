@@ -67,8 +67,10 @@ needed, open browser.
   live updates (new diff generation, comment resolved by agent, agent replies).
 - Outlives the agent process (detached spawn). `--ttl` option to self-stop
   after N minutes idle (no UI or CLI activity), default a few hours.
-- Watches the repo (debounced `git status --porcelain` + head hash) to
-  auto-refresh the diff when the range is `working`/`staged`.
+- Watches the repo (debounced `git status --porcelain` + head hash, plus
+  mtime+size of dirty paths — porcelain output alone doesn't change when an
+  already-dirty file is edited again) to auto-refresh the diff when the range
+  is `working`/`staged`.
 
 ### 3. Diff engine
 
@@ -96,7 +98,7 @@ mutation):
   "comments": [{
     "id": "…", "file": "src/x.ts", "line": 42, "end_line": 45,
     "side": "new", "text": "…",
-    "state": "open",            // open | resolved
+    "state": "open",            // open | resolved | outdated
     "generation": 2,            // diff generation it was written against
     "anchor": { "context_before": [...], "context_after": [...] },
     "replies": [{ "from": "agent", "text": "Fixed in …" }]
@@ -153,12 +155,28 @@ Benchmark harness: `bench/` generates synthetic repos with parameterized diff
 sizes; runs both prediff and difit headless, measures server response times
 and (via Playwright) render timings.
 
+## Decisions made during phase-1 implementation
+
+- **One current session per repo** (open question 1): `open` with a different
+  range replaces the current session; old session files stay on disk but
+  aren't API-addressable. Revisit if multi-range review turns out to matter.
+- **Re-`open` of a submitted session resets it to `reviewing`** (a new review
+  round). Final lifecycle semantics deferred to the UX design spec.
+- Comments have a third state, `outdated`, for failed re-anchors; an
+  outdated comment can recover to `open` if a later generation matches again.
+  Resolved comments that fail re-anchoring stay `resolved`.
+
 ## Open questions (for architecture review)
 
-1. Session-per-range vs one session per repo with range switching?
-2. Comment re-anchoring algorithm: context-line fuzzy match enough, or track
-   through `git diff` between generations?
-3. SSE vs WebSocket (SSE chosen for simplicity; any reason to upgrade?).
-4. Should `wait` also stream events (NDJSON) for richer agent loops?
-5. Distribution: npm package with Bun bundled-compile per platform, or
+1. Comment re-anchoring algorithm: context-line fuzzy match enough, or track
+   through `git diff` between generations? Known gap: anchors are
+   file-content-based, so `old`-side comments on `working` ranges re-anchor
+   against HEAD and can shift silently if the user commits mid-review.
+2. SSE vs WebSocket (SSE chosen for simplicity; any reason to upgrade?).
+3. `wait` semantics: server snapshots known comments at request start, so a
+   comment landing between two `wait` calls is attributed to the previous
+   response. A client-supplied cursor (last-seen comment seq) would be
+   cleaner — possibly alongside an NDJSON streaming mode for richer agent
+   loops.
+4. Distribution: npm package with Bun bundled-compile per platform, or
    require bun/node at runtime?
