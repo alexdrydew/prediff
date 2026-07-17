@@ -1,0 +1,170 @@
+[
+  {
+    "repo": {
+      "dir": "/var/folders/f0/c2d_qfpj7n54b17pvh0whx5m0000gn/T/prediff-bench-1000-O4jGJZ",
+      "targetLines": 1000,
+      "actualAdditions": 601,
+      "actualDeletions": 401,
+      "fileCount": 20,
+      "largestFile": "lib/module_3.md"
+    },
+    "prediff": {
+      "tool": "prediff",
+      "coldMs": 218.4424170000002,
+      "api": {
+        "manifest (/api/diff)": {
+          "ms": 0.2423750000000382,
+          "bytes": 3445
+        },
+        "largest file (/api/diff/file)": {
+          "ms": 13.312874999999622,
+          "bytes": 23814
+        }
+      },
+      "warmOpenMs": 89.38599999999997,
+      "browser": {
+        "domContentLoadedMs": 17.699999928474426,
+        "lcpMs": 40,
+        "firstRenderMs": 60.62487500000043,
+        "firstDiffLineMs": 156.2403330000002,
+        "heapAfterRenderBytes": 3841844,
+        "errors": []
+      }
+    },
+    "difit": {
+      "tool": "difit",
+      "coldMs": 172.28537500000039,
+      "api": {
+        "full diff (/api/diff)": {
+          "ms": 1.5795829999997295,
+          "bytes": 175200
+        }
+      },
+      "browser": {
+        "domContentLoadedMs": 40.800000071525574,
+        "lcpMs": 172,
+        "firstRenderMs": 213.06337499999972,
+        "firstDiffLineMs": 341.5909589999992,
+        "heapAfterRenderBytes": 13397512,
+        "errors": []
+      }
+    }
+  },
+  {
+    "repo": {
+      "dir": "/var/folders/f0/c2d_qfpj7n54b17pvh0whx5m0000gn/T/prediff-bench-10000-SejvOf",
+      "targetLines": 10000,
+      "actualAdditions": 6002,
+      "actualDeletions": 4001,
+      "fileCount": 61,
+      "largestFile": "docs/module_23.py"
+    },
+    "prediff": {
+      "tool": "prediff",
+      "coldMs": 237.6787089999998,
+      "api": {
+        "manifest (/api/diff)": {
+          "ms": 0.21150000000125146,
+          "bytes": 10386
+        },
+        "largest file (/api/diff/file)": {
+          "ms": 13.182957999999417,
+          "bytes": 95519
+        }
+      },
+      "warmOpenMs": 105.48700000000099,
+      "browser": {
+        "domContentLoadedMs": 19.100000023841858,
+        "lcpMs": 48,
+        "firstRenderMs": 53.39237499999945,
+        "firstDiffLineMs": 168.80175000000054,
+        "heapAfterRenderBytes": 4785520,
+        "scroll": {
+          "longTasks": 0,
+          "longTaskTotalMs": 0,
+          "longTaskMaxMs": 0,
+          "avgFps": 119.94516792323509,
+          "heapAfterScrollBytes": 11461260
+        },
+        "errors": []
+      }
+    },
+    "difit": {
+      "tool": "difit",
+      "coldMs": 193.65149999999994,
+      "api": {
+        "full diff (/api/diff)": {
+          "ms": 5.8411249999990105,
+          "bytes": 1663383
+        }
+      },
+      "browser": {
+        "domContentLoadedMs": 44.10000002384186,
+        "lcpMs": 464,
+        "firstRenderMs": 521.9882499999949,
+        "firstDiffLineMs": 790.6304579999996,
+        "heapAfterRenderBytes": 51508152,
+        "fullRenderMs": 790.6304579999996,
+        "scroll": {
+          "longTasks": 2,
+          "longTaskTotalMs": 301,
+          "longTaskMaxMs": 145,
+          "avgFps": 71.06293285155074,
+          "heapAfterScrollBytes": 180265732
+        },
+        "errors": []
+      }
+    }
+  },
+  {
+    "repo": {
+      "dir": "/var/folders/f0/c2d_qfpj7n54b17pvh0whx5m0000gn/T/prediff-bench-50000-LGhuOR",
+      "targetLines": 50000,
+      "actualAdditions": 29990,
+      "actualDeletions": 19997,
+      "fileCount": 138,
+      "largestFile": "src/components/module_19.py"
+    },
+    "prediff": {
+      "tool": "prediff",
+      "coldMs": 304.3075839999947,
+      "api": {
+        "manifest (/api/diff)": {
+          "ms": 0.2268329999933485,
+          "bytes": 23461
+        },
+        "largest file (/api/diff/file)": {
+          "ms": 12.318333000002895,
+          "bytes": 203952
+        }
+      },
+      "warmOpenMs": 157.82825000000594,
+      "browser": {
+        "domContentLoadedMs": 17.800000071525574,
+        "lcpMs": 40,
+        "firstRenderMs": 51.23137500000303,
+        "firstDiffLineMs": 160.16237499999988,
+        "heapAfterRenderBytes": 4723868,
+        "errors": []
+      }
+    },
+    "difit": {
+      "tool": "difit",
+      "coldMs": 294.8208750000049,
+      "api": {
+        "full diff (/api/diff)": {
+          "ms": 24.041250000009313,
+          "bytes": 8155507
+        }
+      },
+      "browser": {
+        "domContentLoadedMs": 40.90000009536743,
+        "lcpMs": 452,
+        "firstRenderMs": 545.2381249999889,
+        "firstDiffLineMs": 1674.0944159999926,
+        "heapAfterRenderBytes": 62422760,
+        "errors": []
+      }
+    }
+  }
+]

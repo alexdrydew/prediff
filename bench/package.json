@@ -1,0 +1,9 @@
+{
+  "name": "prediff-bench",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "difit": "latest",
+    "playwright": "^1.49.0"
+  }
+}
