@@ -5,6 +5,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
     <title>prediff</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      // Stamp the theme before first paint. Manual toggle pins a choice in
+      // localStorage ("prediff.theme"); otherwise follow the OS preference.
+      (function () {
+        var theme;
+        try {
+          var raw = localStorage.getItem("prediff.theme");
+          if (raw !== null) theme = JSON.parse(raw);
+        } catch (e) {
+          /* ignore */
+        }
+        if (theme !== "light" && theme !== "dark") {
+          theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

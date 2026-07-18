@@ -7,19 +7,23 @@
 import type { ReviewComment } from "../types";
 import type { ServerEventName } from "../api/sse";
 import {
-  handleGenerationBump,
+  handleRevisionArrived,
   loadServerState,
   removeComment,
-  setReviewState,
+  setAgentRevising,
+  setSessionState,
+  setViewedFiles,
   upsertComment,
 } from "./store";
 
 /** What an incoming event should do to local state. */
 export type EventPlan =
   | { action: "upsert-comment"; comment: ReviewComment }
+  | { action: "upsert-comments"; comments: ReviewComment[] }
   | { action: "remove-comment"; id: string }
-  | { action: "review-submitted" }
-  | { action: "generation-bump" }
+  | { action: "session-ready" }
+  | { action: "revision-arrived"; revision: number }
+  | { action: "viewed-changed"; files: string[] }
   | { action: "full-resync" }
   | { action: "ignore"; reason: string };
 
@@ -48,10 +52,28 @@ export function planServerEvent(name: ServerEventName, data: unknown): EventPlan
         ? { action: "remove-comment", id }
         : { action: "full-resync" };
     }
-    case "review.submitted":
-      return { action: "review-submitted" };
-    case "generation":
-      return { action: "generation-bump" };
+    case "feedback.sent": {
+      const comments = (data as { comments?: unknown } | null)?.comments;
+      return Array.isArray(comments) && comments.every(isComment)
+        ? { action: "upsert-comments", comments }
+        : { action: "full-resync" };
+    }
+    case "session.ready":
+      return { action: "session-ready" };
+    case "revision": {
+      const revision = (data as { revision?: unknown } | null)?.revision;
+      // The new revision is queued behind a banner — never auto-applied
+      // (spec §6.1/§6.3).
+      return typeof revision === "number"
+        ? { action: "revision-arrived", revision }
+        : { action: "full-resync" };
+    }
+    case "viewed.changed": {
+      const files = (data as { viewed_files?: unknown } | null)?.viewed_files;
+      return Array.isArray(files) && files.every((f) => typeof f === "string")
+        ? { action: "viewed-changed", files }
+        : { action: "full-resync" };
+    }
     case "session.changed":
       return { action: "full-resync" };
   }
@@ -63,14 +85,23 @@ export function applyServerEvent(name: ServerEventName, data: unknown): void {
     case "upsert-comment":
       upsertComment(plan.comment);
       break;
+    case "upsert-comments":
+      for (const c of plan.comments) upsertComment(c);
+      // A feedback batch means the agent has work to do (§6.5) — this also
+      // covers batches sent from another tab or via the CLI.
+      if (name === "feedback.sent") setAgentRevising(true);
+      break;
     case "remove-comment":
       removeComment(plan.id);
       break;
-    case "review-submitted":
-      setReviewState("submitted");
+    case "session-ready":
+      setSessionState("ready");
       break;
-    case "generation-bump":
-      void handleGenerationBump();
+    case "revision-arrived":
+      handleRevisionArrived(plan.revision);
+      break;
+    case "viewed-changed":
+      setViewedFiles(plan.files);
       break;
     case "full-resync":
       void loadServerState();

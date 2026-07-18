@@ -1,38 +1,230 @@
 /** Memoized derived state. */
 
-import type { AppState } from "./store";
+import type { ManifestFile } from "../types";
+import { isExpanded, type AppState, type SyncStatus } from "./store";
 import { buildRows, type Row, type RowsInput } from "../lib/rows";
+import { matchesFilter, parseFilter } from "../lib/filter";
+import { outsideScope, scopeKeywords } from "../lib/scope";
 
-/** memoize-one over the row-model inputs (all reference-compared). */
-let lastInput: RowsInput | null = null;
-let lastRows: Row[] = [];
+// ---------------------------------------------------------------------------
+// Row model
 
-export function selectRows(state: AppState): Row[] {
-  if (!state.manifest) return lastRows.length === 0 ? lastRows : (lastRows = []);
-  const input: RowsInput = {
-    files: state.manifest.files,
-    expanded: state.expanded,
-    fileDiffs: state.fileDiffs,
-    comments: state.comments,
-    composers: state.composers,
-    viewMode: state.viewMode,
+/** memoize-one helper keyed on reference-compared inputs. */
+function memoOne<I extends readonly unknown[], O>(fn: (...args: I) => O): (...args: I) => O {
+  let lastArgs: I | null = null;
+  let lastOut: O;
+  return (...args: I): O => {
+    if (lastArgs !== null && lastArgs.length === args.length && lastArgs.every((a, i) => a === args[i])) {
+      return lastOut;
+    }
+    lastArgs = args;
+    lastOut = fn(...args);
+    return lastOut;
   };
-  if (
-    lastInput &&
-    lastInput.files === input.files &&
-    lastInput.expanded === input.expanded &&
-    lastInput.fileDiffs === input.fileDiffs &&
-    lastInput.comments === input.comments &&
-    lastInput.composers === input.composers &&
-    lastInput.viewMode === input.viewMode
-  ) {
-    return lastRows;
-  }
-  lastInput = input;
-  lastRows = buildRows(input);
-  return lastRows;
 }
 
-export function selectOpenCommentCount(state: AppState): number {
-  return state.comments.filter((c) => c.state === "open").length;
+const expandedSet = memoOne(
+  (
+    files: readonly ManifestFile[],
+    collapsedOverride: AppState["collapsedOverride"],
+    autoCollapsed: AppState["autoCollapsed"],
+  ): ReadonlySet<string> => {
+    const state = { collapsedOverride, autoCollapsed } as AppState;
+    const set = new Set<string>();
+    for (const f of files) if (isExpanded(state, f)) set.add(f.path);
+    return set;
+  },
+);
+
+/** Effective per-file expansion (defaults + overrides), memoized. */
+export function selectExpanded(state: AppState): ReadonlySet<string> {
+  return expandedSet(state.manifest?.files ?? [], state.collapsedOverride, state.autoCollapsed);
+}
+
+const rowsMemo = memoOne((input: RowsInput): Row[] => buildRows(input));
+
+const rowsInputMemo = memoOne(
+  (
+    files: readonly ManifestFile[],
+    expanded: ReadonlySet<string>,
+    viewedFiles: ReadonlySet<string>,
+    fileDiffs: AppState["fileDiffs"],
+    comments: AppState["comments"],
+    composers: AppState["composers"],
+    viewMode: AppState["viewMode"],
+    contextContent: AppState["contextContent"],
+    contextExpansion: AppState["contextExpansion"],
+  ): RowsInput => ({
+    files,
+    expanded,
+    viewedFiles,
+    fileDiffs,
+    comments,
+    composers,
+    viewMode,
+    contextContent,
+    contextExpansion,
+  }),
+);
+
+export function selectRows(state: AppState): Row[] {
+  if (!state.manifest) return EMPTY_ROWS;
+  const input = rowsInputMemo(
+    state.manifest.files,
+    selectExpanded(state),
+    state.viewedFiles,
+    state.fileDiffs,
+    state.comments,
+    state.composers,
+    state.viewMode,
+    state.contextContent,
+    state.contextExpansion,
+  );
+  return rowsMemo(input);
+}
+
+const EMPTY_ROWS: Row[] = [];
+
+// ---------------------------------------------------------------------------
+// Counts
+
+export function selectDraftCount(state: AppState): number {
+  return state.comments.filter((c) => c.state === "draft").length;
+}
+
+export function selectUnresolvedCount(state: AppState): number {
+  return state.comments.filter((c) => c.state !== "resolved").length;
+}
+
+export function selectOrphanCount(state: AppState): number {
+  return state.comments.filter((c) => c.state === "orphaned").length;
+}
+
+/** Sync indicator state (spec §6.5), derived. */
+export function selectSyncStatus(state: AppState): SyncStatus {
+  if (state.syncError !== null) return "error";
+  if (state.connection !== "online") return "offline";
+  if (state.savingCount > 0) return "saving";
+  if (state.agentRevising) return "agent-revising";
+  return "synced";
+}
+
+// ---------------------------------------------------------------------------
+// File tree
+
+export interface TreeItem {
+  file: ManifestFile;
+  viewed: boolean;
+  expanded: boolean;
+  commentCount: number;
+  unresolvedCount: number;
+  agentTouched: boolean;
+  outsideScope: boolean;
+}
+
+export interface TreeModel {
+  /** Ordinary, reviewable files (expanded by default). */
+  active: TreeItem[];
+  /** Auto-collapsed files (generated / deleted / oversized) — §7.1. */
+  collapsed: TreeItem[];
+  totalFiles: number;
+  viewedFiles: number;
+}
+
+const treeMemo = memoOne(
+  (
+    files: readonly ManifestFile[],
+    viewedFiles: ReadonlySet<string>,
+    expanded: ReadonlySet<string>,
+    comments: AppState["comments"],
+    agentTouched: ReadonlySet<string>,
+    scope: string | null,
+    filterQuery: string,
+  ): TreeModel => {
+    const parsed = parseFilter(filterQuery);
+    const keywords = scopeKeywords(scope);
+    const byFile = new Map<string, { total: number; unresolved: number }>();
+    for (const c of comments) {
+      const e = byFile.get(c.file) ?? { total: 0, unresolved: 0 };
+      e.total++;
+      if (c.state !== "resolved") e.unresolved++;
+      byFile.set(c.file, e);
+    }
+    const active: TreeItem[] = [];
+    const collapsed: TreeItem[] = [];
+    for (const file of files) {
+      const counts = byFile.get(file.path) ?? { total: 0, unresolved: 0 };
+      const item: TreeItem = {
+        file,
+        viewed: viewedFiles.has(file.path),
+        expanded: expanded.has(file.path),
+        commentCount: counts.total,
+        unresolvedCount: counts.unresolved,
+        agentTouched: agentTouched.has(file.path),
+        outsideScope: outsideScope(file.path, keywords),
+      };
+      if (
+        !matchesFilter(
+          file.path,
+          {
+            viewed: item.viewed,
+            commentCount: item.commentCount,
+            agentTouched: item.agentTouched,
+          },
+          parsed,
+        )
+      ) {
+        continue;
+      }
+      (item.expanded ? active : collapsed).push(item);
+    }
+    return {
+      active,
+      collapsed,
+      totalFiles: files.length,
+      viewedFiles: files.filter((f) => viewedFiles.has(f.path)).length,
+    };
+  },
+);
+
+export function selectTree(state: AppState): TreeModel {
+  return treeMemo(
+    state.manifest?.files ?? [],
+    state.viewedFiles,
+    selectExpanded(state),
+    state.comments,
+    state.agentTouched,
+    state.session?.scope ?? null,
+    state.filterQuery,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Minimap (spec §7.3): only above ~500 changed lines.
+
+export const MINIMAP_THRESHOLD = 500;
+
+export interface MinimapModel {
+  /** Row indices of hunk headers. */
+  ticks: number[];
+  /** Row indices of comment threads with their state. */
+  comments: Array<{ index: number; state: string }>;
+  rowCount: number;
+}
+
+const minimapMemo = memoOne((rows: Row[]): MinimapModel => {
+  const ticks: number[] = [];
+  const comments: MinimapModel["comments"] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    if (row.kind === "hunk") ticks.push(i);
+    else if (row.kind === "thread") comments.push({ index: i, state: row.comment.state });
+  }
+  return { ticks, comments, rowCount: rows.length };
+});
+
+export function selectMinimap(state: AppState): MinimapModel | null {
+  const manifest = state.manifest;
+  if (!manifest || manifest.additions + manifest.deletions < MINIMAP_THRESHOLD) return null;
+  return minimapMemo(selectRows(state));
 }

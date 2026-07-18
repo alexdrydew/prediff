@@ -1,6 +1,18 @@
 /** Typed client for the daemon's JSON API (same-origin). */
 
-import type { DiffManifest, FileDiff, ReviewComment, Session, Side } from "../types";
+import type {
+  CommentState,
+  CommentTag,
+  DiffManifest,
+  FileContentResult,
+  FileDiff,
+  MarkReadyResult,
+  ReviewComment,
+  RevisionsResult,
+  SendFeedbackResult,
+  Session,
+  Side,
+} from "../types";
 
 export class ApiError extends Error {
   constructor(
@@ -39,20 +51,52 @@ export interface NewCommentRequest {
   end_line?: number;
   side: Side;
   text: string;
+  tag?: CommentTag | null;
 }
 
-export const api = {
-  manifest: (): Promise<DiffManifest> => request("/api/diff"),
+export interface CommentPatch {
+  text?: string;
+  tag?: CommentTag | null;
+  /** Post-draft state changes only: resolve, or reopen back to submitted. */
+  state?: Extract<CommentState, "resolved" | "submitted">;
+}
 
-  fileDiff: (path: string, opts?: { force?: boolean }): Promise<FileDiff> =>
-    request(`/api/diff/file?path=${encodeURIComponent(path)}${opts?.force ? "&force=1" : ""}`),
+export interface ReanchorRequest {
+  line?: number;
+  end_line?: number;
+  side?: Side;
+  file_note?: boolean;
+}
+
+const rev = (revision: number | null): string =>
+  revision === null ? "" : `&revision=${revision}`;
+
+export const api = {
+  manifest: (revision: number | null = null): Promise<DiffManifest> =>
+    request(`/api/diff?${rev(revision).slice(1)}`),
+
+  fileDiff: (
+    path: string,
+    opts?: { force?: boolean; revision?: number | null },
+  ): Promise<FileDiff> =>
+    request(
+      `/api/diff/file?path=${encodeURIComponent(path)}${opts?.force ? "&force=1" : ""}${rev(opts?.revision ?? null)}`,
+    ),
+
+  /** Full one-side file content, for "Expand context" (current revision only). */
+  fileContent: (path: string, side: Side = "new"): Promise<FileContentResult> =>
+    request(`/api/file?path=${encodeURIComponent(path)}&side=${side}`),
 
   session: (): Promise<Session> => request("/api/session"),
 
+  revisions: (): Promise<RevisionsResult> => request("/api/revisions"),
+
+  /** Comments are always created as drafts (spec §4.2). */
   createComment: (input: NewCommentRequest): Promise<ReviewComment> =>
     request("/api/comments", { method: "POST", body: JSON.stringify(input) }),
 
-  updateComment: (id: string, patch: { text?: string; state?: "open" | "resolved" }): Promise<ReviewComment> =>
+  /** Draft autosave (text/tag) and reviewer state changes. */
+  updateComment: (id: string, patch: CommentPatch): Promise<ReviewComment> =>
     request(`/api/comments/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
@@ -61,21 +105,37 @@ export const api = {
   deleteComment: (id: string): Promise<{ ok: boolean }> =>
     request(`/api/comments/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
-  resolveComment: (id: string, reply?: string): Promise<ReviewComment> =>
-    request(`/api/comments/${encodeURIComponent(id)}/resolve`, {
-      method: "POST",
-      body: JSON.stringify(reply !== undefined ? { reply } : {}),
-    }),
-
   replyToComment: (id: string, text: string): Promise<ReviewComment> =>
     request(`/api/comments/${encodeURIComponent(id)}/reply`, {
       method: "POST",
       body: JSON.stringify({ text, from: "reviewer" }),
     }),
 
-  submitReview: (): Promise<{ ok: boolean; review_state: string }> =>
-    request("/api/review/submit", { method: "POST", body: "{}" }),
+  /** "Send this comment now" — a single-comment feedback batch (spec §5.1). */
+  sendComment: (id: string): Promise<ReviewComment> =>
+    request(`/api/comments/${encodeURIComponent(id)}/send`, { method: "POST", body: "{}" }),
 
-  refresh: (): Promise<{ changed: boolean; generation: number }> =>
+  /** Orphaned-comment triage: manual re-anchor or convert to file note (§6.4). */
+  reanchorComment: (id: string, body: ReanchorRequest): Promise<ReviewComment> =>
+    request(`/api/comments/${encodeURIComponent(id)}/reanchor`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** "Send Feedback": batch every draft, wake the agent (spec §5.1). */
+  sendFeedback: (): Promise<SendFeedbackResult> =>
+    request("/api/feedback/send", { method: "POST", body: "{}" }),
+
+  /** "Mark Ready": session-completion signal (spec §5.2). */
+  markReady: (): Promise<MarkReadyResult> =>
+    request("/api/session/mark-ready", { method: "POST", body: "{}" }),
+
+  /** Re-opening a ready session resets it to reviewing. */
+  reopen: (): Promise<unknown> => request("/api/open", { method: "POST", body: "{}" }),
+
+  setViewed: (files: string[], viewed: boolean): Promise<{ viewed_files: string[] }> =>
+    request("/api/viewed", { method: "POST", body: JSON.stringify({ files, viewed }) }),
+
+  refresh: (): Promise<{ changed: boolean; revision: number }> =>
     request("/api/refresh", { method: "POST", body: "{}" }),
 };

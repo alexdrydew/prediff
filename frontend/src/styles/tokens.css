@@ -1,97 +1,174 @@
 /*
- * Design tokens — the ONLY place colors/sizes live. Placeholder values use
- * GitHub-like diff colors; the design pass is expected to replace values (and
- * only values) here.
+ * prediff — design tokens ("Quiet Authority").
+ * Source: design/prediff-tokens.css + design/prediff-token-foundation.md,
+ * extended with the layout/diff/syntax tokens the app needs. Two accents,
+ * strictly separated: blue = ordinary UI actions, violet = agent activity.
+ *
+ * Theming: an inline boot script stamps data-theme on <html> (manual toggle
+ * pins a choice in localStorage; otherwise it follows prefers-color-scheme).
  */
 
 :root {
-  /* typography */
-  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --font-size-ui: 13px;
-  --font-size-code: 12px;
+  --font-ui: "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Consolas, monospace;
 
-  /* layout */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  --filetree-width: 280px;
+  --filetree-width-min: 200px;
+  --filetree-width-max: 480px;
+  --topbar-height: 48px;
+  --context-header-height: 36px;
+  --composer-max-width: 680px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+
+  /* diff layout */
   --line-height-code: 22px;
-  --gutter-width: 3.5em;
-  --radius: 6px;
-
-  /* base surfaces */
-  --color-bg: #ffffff;
-  --color-bg-subtle: #f6f8fa;
-  --color-fg: #1f2328;
-  --color-fg-muted: #59636e;
-  --color-border: #d1d9e0;
-  --color-accent: #0969da;
-  --color-accent-fg: #ffffff;
-  --color-attention: #9a6700;
-  --color-success: #1a7f37;
-  --color-danger: #d1242f;
-
-  /* diff line backgrounds / gutters (GitHub-like placeholders) */
-  --diff-add-bg: #dafbe1;
-  --diff-add-gutter-bg: #aceebb;
-  --diff-del-bg: #ffebe9;
-  --diff-del-gutter-bg: #ffcecb;
-  --diff-context-bg: transparent;
-  --diff-hunk-bg: #ddf4ff;
-  --diff-hunk-fg: #57606a;
-  --diff-gutter-fg: #59636e;
-  --diff-gutter-hover-bg: #b6e3ff;
-  --diff-selected-bg: #fff8c5;
-
-  /* comments */
-  --thread-border: #d1d9e0;
-  --thread-open-accent: #bf8700;
-  --thread-resolved-accent: #1a7f37;
-  --thread-outdated-accent: #8c959f;
-  --thread-bg: #ffffff;
-
-  /* syntax (highlight.js class hooks) */
-  --hl-keyword: #cf222e;
-  --hl-string: #0a3069;
-  --hl-comment: #57606a;
-  --hl-number: #0550ae;
-  --hl-title: #8250df;
-  --hl-attr: #953800;
-  --hl-literal: #0550ae;
+  --gutter-width: 48px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: #0d1117;
-    --color-bg-subtle: #151b23;
-    --color-fg: #f0f6fc;
-    --color-fg-muted: #9198a1;
-    --color-border: #3d444d;
-    --color-accent: #4493f8;
-    --color-accent-fg: #ffffff;
-    --color-attention: #d29922;
-    --color-success: #3fb950;
-    --color-danger: #f85149;
+:root[data-theme="light"] {
+  color-scheme: light;
 
-    --diff-add-bg: rgba(46, 160, 67, 0.15);
-    --diff-add-gutter-bg: rgba(63, 185, 80, 0.3);
-    --diff-del-bg: rgba(248, 81, 73, 0.15);
-    --diff-del-gutter-bg: rgba(248, 81, 73, 0.3);
-    --diff-hunk-bg: rgba(56, 139, 253, 0.15);
-    --diff-hunk-fg: #9198a1;
-    --diff-gutter-fg: #9198a1;
-    --diff-gutter-hover-bg: rgba(56, 139, 253, 0.4);
-    --diff-selected-bg: rgba(187, 128, 9, 0.15);
+  --bg-canvas: #ffffff;
+  --bg-surface: #f7f8fa;
+  --bg-surface-raised: #ffffff;
+  --bg-surface-hover: #f0f1f4;
+  --border-default: #e2e4e9;
+  --border-subtle: #edeef1;
 
-    --thread-border: #3d444d;
-    --thread-open-accent: #d29922;
-    --thread-resolved-accent: #3fb950;
-    --thread-outdated-accent: #656c76;
-    --thread-bg: #151b23;
+  --text-primary: #0d0f14;
+  --text-secondary: #5b6472;
+  --text-tertiary: #8b93a1;
+  --text-on-accent: #ffffff;
 
-    --hl-keyword: #ff7b72;
-    --hl-string: #a5d6ff;
-    --hl-comment: #9198a1;
-    --hl-number: #79c0ff;
-    --hl-title: #d2a8ff;
-    --hl-attr: #ffa657;
-    --hl-literal: #79c0ff;
-  }
+  --accent-primary: #2563eb;
+  --accent-primary-hover: #1d4ed8;
+  --accent-primary-subtle: #eaf0fe;
+
+  --accent-agent: #6366f1;
+  --accent-agent-subtle: #eeeefd;
+
+  --diff-add-bg: #e9f5ec;
+  --diff-add-text: #1a7f37;
+  --diff-add-border: #cfe9d5;
+  --diff-add-gutter-bg: #d1f0da;
+  --diff-remove-bg: #fbebeb;
+  --diff-remove-text: #b42318;
+  --diff-remove-border: #f3d3d3;
+  --diff-remove-gutter-bg: #f8dcda;
+  --diff-context-text: #5b6472;
+  --diff-whitespace-bg: #f3f3f4;
+  --diff-word-add-bg: #abf2bc;
+  --diff-word-del-bg: #ffcecb;
+  --diff-hunk-bg: #eaf0fe;
+  --diff-hunk-text: #2563eb;
+  --diff-gutter-text: #a0a7b4;
+  --diff-gutter-bg: #f6f7f9;
+  --diff-gutter-border: #eceef2;
+  --diff-empty-hatch: #eceef2;
+  --diff-selected-bg: #fff3c4;
+
+  --status-caution: #b45309;
+  --status-caution-bg: #fef3c7;
+  --status-error: #b42318;
+  --status-error-bg: #fee4e2;
+  --status-success: #1a7f37;
+  --status-success-bg: #e9f5ec;
+
+  --code-block-bg: #16181f;
+  --code-block-text: #e6e8eb;
+
+  --overlay-scrim: rgba(255, 255, 255, 0.6);
+  --shadow-panel: 0 8px 32px rgba(13, 15, 20, 0.14);
+
+  /* syntax (highlight.js hooks) — muted, low-saturation */
+  --hl-keyword: #a4335a;
+  --hl-string: #0a5a8c;
+  --hl-comment: #8b93a1;
+  --hl-number: #6f42c1;
+  --hl-title: #7c4dff;
+  --hl-attr: #92551c;
+  --hl-literal: #205ea6;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-canvas: #0a0b0d;
+  --bg-surface: #111318;
+  --bg-surface-raised: #16181f;
+  --bg-surface-hover: #1c1f26;
+  --border-default: #262a33;
+  --border-subtle: #1c1f26;
+
+  --text-primary: #e6e8eb;
+  --text-secondary: #9aa3b2;
+  --text-tertiary: #676f7d;
+  --text-on-accent: #ffffff;
+
+  --accent-primary: #3b82f6;
+  --accent-primary-hover: #60a5fa;
+  --accent-primary-subtle: #16223d;
+
+  --accent-agent: #818cf8;
+  --accent-agent-subtle: #1e1f3a;
+
+  --diff-add-bg: rgba(46, 160, 67, 0.13);
+  --diff-add-text: #4ade80;
+  --diff-add-border: rgba(46, 160, 67, 0.28);
+  --diff-add-gutter-bg: rgba(46, 160, 67, 0.2);
+  --diff-remove-bg: rgba(248, 81, 73, 0.13);
+  --diff-remove-text: #f87171;
+  --diff-remove-border: rgba(248, 81, 73, 0.28);
+  --diff-remove-gutter-bg: rgba(248, 81, 73, 0.2);
+  --diff-context-text: #9aa3b2;
+  --diff-whitespace-bg: #16181f;
+  --diff-word-add-bg: rgba(46, 160, 67, 0.34);
+  --diff-word-del-bg: rgba(248, 81, 73, 0.34);
+  --diff-hunk-bg: #172240;
+  --diff-hunk-text: #5b9cf6;
+  --diff-gutter-text: #464e5e;
+  --diff-gutter-bg: #111318;
+  --diff-gutter-border: #1e2129;
+  --diff-empty-hatch: #1e2129;
+  --diff-selected-bg: rgba(240, 180, 41, 0.16);
+
+  --status-caution: #f0b429;
+  --status-caution-bg: #2a2210;
+  --status-error: #f87171;
+  --status-error-bg: #2a1515;
+  --status-success: #4ade80;
+  --status-success-bg: #10261a;
+
+  --code-block-bg: #16181f;
+  --code-block-text: #e6e8eb;
+
+  --overlay-scrim: rgba(10, 11, 13, 0.6);
+  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+  --hl-keyword: #e58fa9;
+  --hl-string: #8fc7f3;
+  --hl-comment: #676f7d;
+  --hl-number: #c0a6f5;
+  --hl-title: #b9a6ff;
+  --hl-attr: #e0b184;
+  --hl-literal: #79b8ff;
 }

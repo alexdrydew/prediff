@@ -4,9 +4,12 @@ import type { HunkLine, Side } from "../../types";
 import {
   beginSelection,
   extendSelection,
+  reanchorTo,
+  store,
   useStore,
   type LineSelection,
 } from "../../state/store";
+import { changedRanges, wordDiff } from "../../lib/wordDiff";
 import { CodeText } from "./CodeText";
 
 function inSelection(
@@ -17,6 +20,16 @@ function inSelection(
 ): boolean {
   if (!sel || line === null || sel.file !== path || sel.side !== side) return false;
   return line >= Math.min(sel.anchor, sel.head) && line <= Math.max(sel.anchor, sel.head);
+}
+
+/** Gutter click: begin a comment range drag — or, in re-anchor mode (§6.4),
+ * place the orphaned comment on this line. */
+export function gutterMouseDown(path: string, side: Side, line: number): void {
+  if (store.getState().reanchoring !== null) {
+    void reanchorTo(side, line);
+    return;
+  }
+  beginSelection(path, side, line);
 }
 
 function Gutter({
@@ -35,7 +48,7 @@ function Gutter({
       onMouseDown={(e) => {
         if (line === null || e.button !== 0) return;
         e.preventDefault();
-        beginSelection(path, side, line);
+        gutterMouseDown(path, side, line);
       }}
       onMouseEnter={() => {
         if (line !== null) extendSelection(path, side, line);
@@ -50,10 +63,13 @@ export const UnifiedLineRow = memo(function UnifiedLineRow({
   path,
   line,
   lang,
+  counterpart,
 }: {
   path: string;
   line: HunkLine;
   lang: string | null;
+  /** Paired del/add counterpart text, for word-level marks. */
+  counterpart?: string | undefined;
 }): ReactElement {
   const selected = useStore(
     (s) =>
@@ -61,14 +77,22 @@ export const UnifiedLineRow = memo(function UnifiedLineRow({
       inSelection(s.selection, path, "new", line.new_line),
   );
   const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
+
+  let marks: Array<[number, number]> | undefined;
+  if (counterpart !== undefined && line.kind !== "context") {
+    const diff =
+      line.kind === "del" ? wordDiff(line.text, counterpart) : wordDiff(counterpart, line.text);
+    if (diff) marks = changedRanges(line.kind === "del" ? diff.old : diff.new);
+  }
+
   return (
     <div className={`row-line kind-${line.kind}${selected ? " selected" : ""}`}>
       <Gutter path={path} side="old" line={line.old_line} />
       <Gutter path={path} side="new" line={line.new_line} />
       <span className="sign">{sign}</span>
       <span className="code">
-        <CodeText text={line.text} lang={lang} />
-        {line.no_newline === true && <span className="no-newline"> ⛔ no newline at EOF</span>}
+        <CodeText text={line.text} lang={lang} marks={marks} />
+        {line.no_newline === true && <span className="no-newline"> ∅ no newline at EOF</span>}
       </span>
     </div>
   );

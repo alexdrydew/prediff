@@ -8,14 +8,17 @@
  * it may have missed while offline.
  */
 
+/** Event names the daemon broadcasts (src/server/events.ts). */
 export const SERVER_EVENTS = [
-  "generation",
+  "revision",
   "comment.created",
   "comment.updated",
   "comment.resolved",
   "comment.deleted",
-  "review.submitted",
+  "feedback.sent",
+  "session.ready",
   "session.changed",
+  "viewed.changed",
 ] as const;
 
 export type ServerEventName = (typeof SERVER_EVENTS)[number];

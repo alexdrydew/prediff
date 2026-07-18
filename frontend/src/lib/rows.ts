@@ -1,11 +1,11 @@
 /**
  * The row model: flattens manifest + loaded hunks + comments + open composers
- * into one flat array that a single virtualizer windows over. This is the
- * core of the "50k lines with bounded DOM" strategy — the whole review is one
- * list; only visible rows materialize as DOM nodes.
+ * + expanded context into one flat array that a single virtualizer windows
+ * over. This is the core of the "50k lines with bounded DOM" strategy — the
+ * whole review is one list; only visible rows materialize as DOM nodes.
  */
 
-import type { FileDiff, HunkLine, ManifestFile, ReviewComment, Side } from "../types";
+import type { FileDiff, Hunk, HunkLine, ManifestFile, ReviewComment, Side } from "../types";
 import type { ComposerTarget, FileDiffState, ViewMode } from "../state/store";
 import { pairHunkLines, type PairedLine } from "./pairing";
 
@@ -22,29 +22,62 @@ export interface HunkHeaderInfo {
 
 export type MetaVariant = "binary" | "large" | "loading" | "error" | "empty";
 
+/** One unexpanded context gap ("Expand context" control, spec §3.2). */
+export interface GapInfo {
+  /** Gap index: 0 = above the first hunk … hunkCount = after the last. */
+  index: number;
+  /** Hidden line count; null when the file length isn't known yet. */
+  hidden: number | null;
+  /** Whether new-side content has been fetched for this file. */
+  loaded: boolean;
+  /** Directions that reveal lines (leading gap only expands up, etc.). */
+  up: boolean;
+  down: boolean;
+}
+
 export type Row =
   | {
       kind: "file";
       key: string;
       file: ManifestFile;
       expanded: boolean;
+      viewed: boolean;
       commentCount: number;
-      openCommentCount: number;
+      unresolvedCount: number;
     }
-  | { kind: "hunk"; key: string; path: string; hunk: HunkHeaderInfo }
-  | { kind: "line"; key: string; path: string; line: HunkLine }
-  | { kind: "pair"; key: string; path: string; pair: PairedLine }
+  | { kind: "hunk"; key: string; path: string; hunk: HunkHeaderInfo; hunkIdx: number; hunkCount: number }
+  | {
+      kind: "line";
+      key: string;
+      path: string;
+      line: HunkLine;
+      hunkIdx: number;
+      /** Text of the paired del/add line, for word-level marks (spec §3.2). */
+      counterpart?: string;
+    }
+  | { kind: "pair"; key: string; path: string; pair: PairedLine; hunkIdx: number }
   | { kind: "thread"; key: string; path: string; comment: ReviewComment; detached: boolean }
   | { kind: "composer"; key: string; path: string; target: ComposerTarget }
-  | { kind: "meta"; key: string; path: string; variant: MetaVariant; message?: string };
+  | { kind: "meta"; key: string; path: string; variant: MetaVariant; message?: string }
+  | { kind: "expand"; key: string; path: string; gap: GapInfo; hunkIdx: number };
+
+/** Per-gap reveal state: lines shown from the gap's top / bottom edge. */
+export interface GapReveal {
+  top: number;
+  bottom: number;
+}
 
 export interface RowsInput {
   files: readonly ManifestFile[];
   expanded: ReadonlySet<string>;
+  viewedFiles: ReadonlySet<string>;
   fileDiffs: Readonly<Record<string, FileDiffState>>;
   comments: readonly ReviewComment[];
   composers: Readonly<Record<string, ComposerTarget>>;
   viewMode: ViewMode;
+  /** New-side full file content, fetched on first "Expand context". */
+  contextContent: Readonly<Record<string, readonly string[]>>;
+  contextExpansion: Readonly<Record<string, Readonly<Record<number, GapReveal>>>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,10 +117,27 @@ export function buildRows(input: RowsInput): Row[] {
       key: `f:${file.path}`,
       file,
       expanded,
+      viewed: input.viewedFiles.has(file.path),
       commentCount: fileAtt.comments.length,
-      openCommentCount: fileAtt.comments.filter((c) => c.state === "open").length,
+      unresolvedCount: fileAtt.comments.filter((c) => c.state !== "resolved").length,
     });
     if (!expanded) continue;
+
+    // File-level notes (line 0, converted orphans — spec §6.4) render right
+    // under the file header, before any hunk.
+    const placed = new Set<ReviewComment | ComposerTarget>();
+    for (const comment of fileAtt.comments) {
+      if (comment.line === 0) {
+        placed.add(comment);
+        rows.push({
+          kind: "thread",
+          key: `t:${comment.id}`,
+          path: file.path,
+          comment,
+          detached: false,
+        });
+      }
+    }
 
     if (file.binary) {
       rows.push({ kind: "meta", key: `m:${file.path}`, path: file.path, variant: "binary" });
@@ -120,10 +170,9 @@ export function buildRows(input: RowsInput): Row[] {
       continue;
     }
 
-    const placed = new Set<ReviewComment | ComposerTarget>();
-    pushDiffRows(rows, file.path, diff, input.viewMode, fileAtt, placed);
+    pushDiffRows(rows, file.path, diff, input, fileAtt, placed);
 
-    // Anything that didn't land on a rendered line (outdated comments, lines
+    // Anything that didn't land on a rendered line (orphaned comments, lines
     // outside hunk context) is appended at the end of the file so nothing is
     // ever invisible.
     for (const comment of fileAtt.comments) {
@@ -151,11 +200,48 @@ export function buildRows(input: RowsInput): Row[] {
   return rows;
 }
 
+// ---------------------------------------------------------------------------
+// Context gaps
+
+interface Gap {
+  index: number;
+  /** New-side inclusive range [start, end]; end null = unknown (EOF gap,
+   * content not fetched). */
+  start: number;
+  end: number | null;
+  /** new-line − old-line offset inside this gap. */
+  delta: number;
+}
+
+/** The context gaps around/between hunks, in new-side line numbers. */
+export function fileGaps(hunks: readonly Hunk[], fileLines: number | null): Gap[] {
+  const gaps: Gap[] = [];
+  for (let i = 0; i <= hunks.length; i++) {
+    const prev = hunks[i - 1];
+    const next = hunks[i];
+    const start = prev ? prev.new_start + prev.new_lines : 1;
+    let end: number | null;
+    if (next) {
+      end = next.new_start - 1;
+    } else {
+      end = fileLines; // null while unknown
+    }
+    const delta = next
+      ? next.new_start - next.old_start
+      : prev
+        ? prev.new_start + prev.new_lines - (prev.old_start + prev.old_lines)
+        : 0;
+    if (end !== null && end < start) continue; // no gap
+    gaps.push({ index: i, start, end, delta });
+  }
+  return gaps;
+}
+
 function pushDiffRows(
   rows: Row[],
   path: string,
   diff: FileDiff,
-  viewMode: ViewMode,
+  input: RowsInput,
   att: FileAttachments,
   placed: Set<ReviewComment | ComposerTarget>,
 ): void {
@@ -170,37 +256,108 @@ function pushDiffRows(
     }
     return e;
   };
-  for (const c of att.comments) slot(c.side, c.end_line).comments.push(c);
+  for (const c of att.comments) {
+    if (c.line > 0) slot(c.side, c.end_line).comments.push(c);
+  }
   for (const c of att.composers) slot(c.side, c.end_line).composers.push(c);
 
-  const emitAttachments = (line: HunkLine | PairedLine): void => {
-    const sides: Array<{ side: Side; n: number | null }> =
-      "kind" in line
-        ? [
-            { side: "old", n: line.old_line },
-            { side: "new", n: line.new_line },
-          ]
-        : [
-            { side: "old", n: line.left?.old_line ?? null },
-            { side: "new", n: line.right?.new_line ?? null },
-          ];
-    for (const { side, n } of sides) {
-      if (n === null) continue;
-      const e = bySideLine.get(`${side}:${n}`);
-      if (!e) continue;
-      for (const comment of e.comments) {
-        if (placed.has(comment)) continue;
-        placed.add(comment);
-        rows.push({ kind: "thread", key: `t:${comment.id}`, path, comment, detached: false });
-      }
-      for (const composer of e.composers) {
-        if (placed.has(composer)) continue;
-        placed.add(composer);
-        rows.push({ kind: "composer", key: `c:${composer.key}`, path, target: composer });
-      }
+  const emitAttachmentsAt = (side: Side, n: number | null): void => {
+    if (n === null) return;
+    const e = bySideLine.get(`${side}:${n}`);
+    if (!e) return;
+    for (const comment of e.comments) {
+      if (placed.has(comment)) continue;
+      placed.add(comment);
+      rows.push({ kind: "thread", key: `t:${comment.id}`, path, comment, detached: false });
+    }
+    for (const composer of e.composers) {
+      if (placed.has(composer)) continue;
+      placed.add(composer);
+      rows.push({ kind: "composer", key: `c:${composer.key}`, path, target: composer });
     }
   };
 
+  const emitAttachments = (line: HunkLine | PairedLine): void => {
+    if ("kind" in line) {
+      emitAttachmentsAt("old", line.old_line);
+      emitAttachmentsAt("new", line.new_line);
+    } else {
+      emitAttachmentsAt("old", line.left?.old_line ?? null);
+      emitAttachmentsAt("new", line.right?.new_line ?? null);
+    }
+  };
+
+  const content = input.contextContent[path];
+  const expansion = input.contextExpansion[path] ?? {};
+  const gaps = fileGaps(diff.hunks, content ? content.length : null);
+  const gapByIndex = new Map(gaps.map((g) => [g.index, g]));
+  const hunkCount = diff.hunks.length;
+
+  const emitContextLine = (newLine: number, delta: number, hunkIdx: number): void => {
+    const text = content?.[newLine - 1];
+    if (text === undefined) return;
+    const line: HunkLine = {
+      kind: "context",
+      old_line: newLine - delta,
+      new_line: newLine,
+      text,
+    };
+    if (input.viewMode === "unified") {
+      rows.push({ kind: "line", key: `x:${path}:${newLine}`, path, line, hunkIdx });
+    } else {
+      rows.push({
+        kind: "pair",
+        key: `x:${path}:${newLine}`,
+        path,
+        pair: { left: line, right: line },
+        hunkIdx,
+      });
+    }
+    emitAttachments(line);
+  };
+
+  /** Emit a gap's revealed lines and (if lines remain hidden) an expand row.
+   * `hunkIdx` is the following hunk (or hunkCount for the trailing gap). */
+  const emitGap = (index: number): void => {
+    const gap = gapByIndex.get(index);
+    if (!gap) return;
+    const hunkIdx = Math.min(index, hunkCount - 1);
+    const reveal = expansion[index] ?? { top: 0, bottom: 0 };
+    const loaded = content !== undefined;
+    const isLeading = index === 0;
+    const isTrailing = index === hunkCount;
+
+    if (gap.end !== null) {
+      const total = gap.end - gap.start + 1;
+      const top = Math.min(isLeading ? 0 : reveal.top, total);
+      const bottom = Math.min(isTrailing ? 0 : reveal.bottom, total - top);
+      const hidden = total - top - bottom;
+      for (let n = gap.start; n < gap.start + top; n++) emitContextLine(n, gap.delta, hunkIdx);
+      if (hidden > 0) {
+        // "up" reveals lines above the next hunk (needs a next hunk);
+        // "down" reveals lines below the previous hunk (needs a previous one).
+        rows.push({
+          kind: "expand",
+          key: `e:${path}:${index}`,
+          path,
+          hunkIdx,
+          gap: { index, hidden, loaded, up: !isTrailing, down: !isLeading },
+        });
+      }
+      for (let n = gap.end - bottom + 1; n <= gap.end; n++) emitContextLine(n, gap.delta, hunkIdx);
+    } else {
+      // Trailing gap with unknown length: offer the control; clicking fetches.
+      rows.push({
+        kind: "expand",
+        key: `e:${path}:${index}`,
+        path,
+        hunkIdx,
+        gap: { index, hidden: null, loaded, up: false, down: true },
+      });
+    }
+  };
+
+  emitGap(0);
   for (let h = 0; h < diff.hunks.length; h++) {
     const hunk = diff.hunks[h];
     if (!hunk) continue;
@@ -208,6 +365,8 @@ function pushDiffRows(
       kind: "hunk",
       key: `h:${path}:${h}`,
       path,
+      hunkIdx: h,
+      hunkCount,
       hunk: {
         old_start: hunk.old_start,
         old_lines: hunk.old_lines,
@@ -216,11 +375,28 @@ function pushDiffRows(
         header: hunk.header,
       },
     });
-    if (viewMode === "unified") {
+    if (input.viewMode === "unified") {
+      // Word-level marks need the paired counterpart; derive it from the same
+      // pairing the split view uses (object identity ties them together).
+      const counterpartOf = new Map<HunkLine, string>();
+      for (const pair of pairHunkLines(hunk.lines)) {
+        if (pair.left && pair.right && pair.left !== pair.right) {
+          counterpartOf.set(pair.left, pair.right.text);
+          counterpartOf.set(pair.right, pair.left.text);
+        }
+      }
       for (let i = 0; i < hunk.lines.length; i++) {
         const line = hunk.lines[i];
         if (!line) continue;
-        rows.push({ kind: "line", key: lineKey(path, line, h, i), path, line });
+        const counterpart = counterpartOf.get(line);
+        rows.push({
+          kind: "line",
+          key: lineKey(path, line, h, i),
+          path,
+          line,
+          hunkIdx: h,
+          ...(counterpart !== undefined ? { counterpart } : {}),
+        });
         emitAttachments(line);
       }
     } else {
@@ -228,10 +404,11 @@ function pushDiffRows(
       for (let i = 0; i < pairs.length; i++) {
         const pair = pairs[i];
         if (!pair) continue;
-        rows.push({ kind: "pair", key: `p:${path}:${h}:${i}`, path, pair });
+        rows.push({ kind: "pair", key: `p:${path}:${h}:${i}`, path, pair, hunkIdx: h });
         emitAttachments(pair);
       }
     }
+    emitGap(h + 1);
   }
 }
 
@@ -250,11 +427,12 @@ function lineKey(path: string, line: HunkLine, hunkIdx: number, lineIdx: number)
 // real measurement.
 
 export const LINE_ROW_PX = 22;
-export const FILE_ROW_PX = 34;
-export const HUNK_ROW_PX = 24;
+export const FILE_ROW_PX = 36;
+export const HUNK_ROW_PX = 28;
 export const META_ROW_PX = 30;
+export const EXPAND_ROW_PX = 26;
 export const THREAD_ROW_ESTIMATE_PX = 120;
-export const COMPOSER_ROW_ESTIMATE_PX = 130;
+export const COMPOSER_ROW_ESTIMATE_PX = 170;
 
 export function estimateRowHeight(row: Row): number {
   switch (row.kind) {
@@ -267,6 +445,8 @@ export function estimateRowHeight(row: Row): number {
       return HUNK_ROW_PX;
     case "meta":
       return META_ROW_PX;
+    case "expand":
+      return EXPAND_ROW_PX;
     case "thread":
       return THREAD_ROW_ESTIMATE_PX;
     case "composer":

@@ -9,10 +9,12 @@ const comment: ReviewComment = {
   end_line: 1,
   side: "new",
   text: "hi",
-  state: "open",
-  generation: 1,
+  state: "draft",
+  tag: null,
+  revision: 1,
   anchor: { context_before: [], lines: [], context_after: [] },
   replies: [],
+  batch_id: null,
   created_at: "",
   updated_at: "",
 };
@@ -43,16 +45,33 @@ describe("planServerEvent (SSE reducer)", () => {
     expect(planServerEvent("comment.deleted", {}).action).toBe("full-resync");
   });
 
-  test("review.submitted flips review state without refetching diffs", () => {
-    expect(planServerEvent("review.submitted", { session_id: "s" })).toEqual({
-      action: "review-submitted",
+  test("feedback.sent upserts the batch's comments", () => {
+    expect(planServerEvent("feedback.sent", { batch: { id: "b1" }, comments: [comment] })).toEqual(
+      { action: "upsert-comments", comments: [comment] },
+    );
+    expect(planServerEvent("feedback.sent", { comments: "nope" }).action).toBe("full-resync");
+  });
+
+  test("session.ready flips session state without refetching diffs", () => {
+    expect(planServerEvent("session.ready", { session_id: "s" })).toEqual({
+      action: "session-ready",
     });
   });
 
-  test("generation triggers the soft-refresh path", () => {
-    expect(planServerEvent("generation", { generation: 2 })).toEqual({
-      action: "generation-bump",
+  test("revision queues the new revision — never auto-applies (§6.1)", () => {
+    expect(planServerEvent("revision", { revision: 3, files: 2 })).toEqual({
+      action: "revision-arrived",
+      revision: 3,
     });
+    expect(planServerEvent("revision", {}).action).toBe("full-resync");
+  });
+
+  test("viewed.changed replaces the viewed set", () => {
+    expect(planServerEvent("viewed.changed", { viewed_files: ["a.ts"] })).toEqual({
+      action: "viewed-changed",
+      files: ["a.ts"],
+    });
+    expect(planServerEvent("viewed.changed", { viewed_files: [1] }).action).toBe("full-resync");
   });
 
   test("session.changed forces a full resync", () => {

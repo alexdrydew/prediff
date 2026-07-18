@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { FileDiff, HunkLine, ManifestFile, ReviewComment } from "../types";
 import type { ComposerTarget, FileDiffState } from "../state/store";
-import { buildRows, estimateRowHeight, LINE_ROW_PX, type RowsInput } from "./rows";
+import { buildRows, estimateRowHeight, LINE_ROW_PX, type Row, type RowsInput } from "./rows";
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -39,7 +39,7 @@ const diff = (path: string, lines: HunkLine[]): FileDiff => ({
   ],
 });
 
-const ready = (d: FileDiff): FileDiffState => ({ status: "ready", diff: d, generation: 1 });
+const ready = (d: FileDiff): FileDiffState => ({ status: "ready", diff: d, revision: 1 });
 
 const comment = (
   id: string,
@@ -53,10 +53,12 @@ const comment = (
   end_line: ln,
   side: "new",
   text: "needs work",
-  state: "open",
-  generation: 1,
+  state: "submitted",
+  tag: null,
+  revision: 1,
   anchor: { context_before: [], lines: [], context_after: [] },
   replies: [],
+  batch_id: null,
   created_at: "",
   updated_at: "",
   ...overrides,
@@ -65,12 +67,19 @@ const comment = (
 const baseInput = (overrides: Partial<RowsInput>): RowsInput => ({
   files: [],
   expanded: new Set(),
+  viewedFiles: new Set(),
   fileDiffs: {},
   comments: [],
   composers: {},
   viewMode: "unified",
+  contextContent: {},
+  contextExpansion: {},
   ...overrides,
 });
+
+/** Row kinds, without expand-context control rows (asserted separately). */
+const kinds = (rows: Row[]): string[] =>
+  rows.filter((r) => r.kind !== "expand").map((r) => r.kind);
 
 // ---------------------------------------------------------------------------
 
@@ -89,7 +98,7 @@ describe("buildRows", () => {
         fileDiffs: { "a.ts": ready(diff("a.ts", lines)) },
       }),
     );
-    expect(rows.map((r) => r.kind)).toEqual(["file", "hunk", "line", "line", "line"]);
+    expect(kinds(rows)).toEqual(["file", "hunk", "line", "line", "line"]);
   });
 
   test("split mode pairs del/add into one row", () => {
@@ -102,7 +111,21 @@ describe("buildRows", () => {
         viewMode: "split",
       }),
     );
-    expect(rows.map((r) => r.kind)).toEqual(["file", "hunk", "pair"]);
+    expect(kinds(rows)).toEqual(["file", "hunk", "pair"]);
+  });
+
+  test("unified del/add pairs carry each other's text for word-diff marks", () => {
+    const lines = [line("del", 2, null), line("add", null, 2)];
+    const rows = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        expanded: new Set(["a.ts"]),
+        fileDiffs: { "a.ts": ready(diff("a.ts", lines)) },
+      }),
+    );
+    const lineRows = rows.filter((r) => r.kind === "line");
+    expect(lineRows[0]).toMatchObject({ counterpart: lines[1]!.text });
+    expect(lineRows[1]).toMatchObject({ counterpart: lines[0]!.text });
   });
 
   test("expanded-but-unfetched file shows a loading row", () => {
@@ -136,9 +159,9 @@ describe("buildRows", () => {
         comments: [comment("c1", "a.ts", 2)],
       }),
     );
-    const kinds = rows.map((r) => r.kind);
-    expect(kinds).toEqual(["file", "hunk", "line", "line", "thread", "line"]);
-    expect(rows[4]).toMatchObject({ comment: { id: "c1" }, detached: false });
+    expect(kinds(rows)).toEqual(["file", "hunk", "line", "line", "thread", "line"]);
+    const thread = rows.find((r) => r.kind === "thread");
+    expect(thread).toMatchObject({ comment: { id: "c1" }, detached: false });
   });
 
   test("range comment anchors at its end line", () => {
@@ -151,7 +174,7 @@ describe("buildRows", () => {
         comments: [comment("c1", "a.ts", 1, { end_line: 2 })],
       }),
     );
-    expect(rows.map((r) => r.kind)).toEqual(["file", "hunk", "line", "line", "thread", "line"]);
+    expect(kinds(rows)).toEqual(["file", "hunk", "line", "line", "thread", "line"]);
   });
 
   test("old-side comment anchors on old line numbers", () => {
@@ -164,22 +187,36 @@ describe("buildRows", () => {
         comments: [comment("c1", "a.ts", 5, { side: "old" })],
       }),
     );
-    // thread should follow the del row (index 2), not the add row
-    expect(rows.map((r) => r.kind)).toEqual(["file", "hunk", "line", "thread", "line"]);
+    // thread should follow the del row, not the add row
+    expect(kinds(rows)).toEqual(["file", "hunk", "line", "thread", "line"]);
   });
 
-  test("comment with no matching line is appended detached, never dropped", () => {
+  test("orphaned comment with no matching line is appended detached, never dropped", () => {
     const lines = [line("context", 1, 1)];
     const rows = buildRows(
       baseInput({
         files: [file("a.ts")],
         expanded: new Set(["a.ts"]),
         fileDiffs: { "a.ts": ready(diff("a.ts", lines)) },
-        comments: [comment("gone", "a.ts", 999, { state: "outdated" })],
+        comments: [comment("gone", "a.ts", 999, { state: "orphaned" })],
       }),
     );
     const last = rows[rows.length - 1];
     expect(last).toMatchObject({ kind: "thread", detached: true, comment: { id: "gone" } });
+  });
+
+  test("file-level note (line 0) renders right under the file header", () => {
+    const lines = [line("context", 1, 1)];
+    const rows = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        expanded: new Set(["a.ts"]),
+        fileDiffs: { "a.ts": ready(diff("a.ts", lines)) },
+        comments: [comment("note", "a.ts", 0, { end_line: 0 })],
+      }),
+    );
+    expect(kinds(rows)).toEqual(["file", "thread", "hunk", "line"]);
+    expect(rows[1]).toMatchObject({ detached: false });
   });
 
   test("comments on collapsed files are counted on the header", () => {
@@ -192,7 +229,7 @@ describe("buildRows", () => {
         ],
       }),
     );
-    expect(rows[0]).toMatchObject({ kind: "file", commentCount: 2, openCommentCount: 1 });
+    expect(rows[0]).toMatchObject({ kind: "file", commentCount: 2, unresolvedCount: 1 });
   });
 
   test("open composer renders under its target line", () => {
@@ -212,7 +249,7 @@ describe("buildRows", () => {
         composers: { k1: target },
       }),
     );
-    expect(rows.map((r) => r.kind)).toEqual(["file", "hunk", "line", "composer", "line"]);
+    expect(kinds(rows)).toEqual(["file", "hunk", "line", "composer", "line"]);
   });
 
   test("same comment is placed exactly once even when line numbers repeat across hunks", () => {
@@ -236,6 +273,97 @@ describe("buildRows", () => {
     expect(rows.filter((r) => r.kind === "thread")).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Expand context (spec §3.2)
+
+describe("expand context", () => {
+  /** One hunk at new lines 10–12 (old 8–10), file content 1..30. */
+  const middleHunk = (): FileDiff => ({
+    path: "a.ts",
+    binary: false,
+    large: false,
+    hunks: [
+      {
+        old_start: 8,
+        old_lines: 3,
+        new_start: 10,
+        new_lines: 3,
+        header: "",
+        lines: [line("context", 8, 10), line("add", null, 11), line("context", 9, 12)],
+      },
+    ],
+  });
+  const content = Array.from({ length: 30 }, (_, i) => `content line ${i + 1}`);
+
+  test("gaps produce expand rows above and below a hunk", () => {
+    const rows = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        expanded: new Set(["a.ts"]),
+        fileDiffs: { "a.ts": ready(middleHunk()) },
+        contextContent: { "a.ts": content },
+      }),
+    );
+    const expands = rows.filter((r) => r.kind === "expand");
+    expect(expands).toHaveLength(2);
+    expect(expands[0]).toMatchObject({ gap: { index: 0, hidden: 9, up: true, down: false } });
+    expect(expands[1]).toMatchObject({ gap: { index: 1, hidden: 18, up: false, down: true } });
+  });
+
+  test("trailing gap is offered even before content is fetched", () => {
+    const rows = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        expanded: new Set(["a.ts"]),
+        fileDiffs: { "a.ts": ready(middleHunk()) },
+      }),
+    );
+    const expands = rows.filter((r) => r.kind === "expand");
+    expect(expands.map((r) => (r.kind === "expand" ? r.gap.hidden : -1))).toEqual([9, null]);
+  });
+
+  test("revealed context lines get correct old/new numbers", () => {
+    const rows = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        expanded: new Set(["a.ts"]),
+        fileDiffs: { "a.ts": ready(middleHunk()) },
+        contextContent: { "a.ts": content },
+        // reveal 3 lines above the hunk (bottom edge of leading gap)
+        contextExpansion: { "a.ts": { 0: { top: 0, bottom: 3 } } },
+      }),
+    );
+    const synthetic = rows.filter((r) => r.kind === "line" && r.key.startsWith("x:"));
+    expect(synthetic).toHaveLength(3);
+    expect(synthetic[0]).toMatchObject({
+      line: { new_line: 7, old_line: 5, text: "content line 7", kind: "context" },
+    });
+    expect(synthetic[2]).toMatchObject({ line: { new_line: 9, old_line: 7 } });
+    // gap shrinks accordingly
+    const expand0 = rows.find((r) => r.kind === "expand" && r.gap.index === 0);
+    expect(expand0).toMatchObject({ gap: { hidden: 6 } });
+  });
+
+  test("fully revealed gap emits no expand row", () => {
+    const rows = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        expanded: new Set(["a.ts"]),
+        fileDiffs: { "a.ts": ready(middleHunk()) },
+        contextContent: { "a.ts": content },
+        contextExpansion: {
+          "a.ts": { 0: { top: 0, bottom: 100 }, 1: { top: 100, bottom: 0 } },
+        },
+      }),
+    );
+    expect(rows.filter((r) => r.kind === "expand")).toHaveLength(0);
+    const synthetic = rows.filter((r) => r.kind === "line" && r.key.startsWith("x:"));
+    expect(synthetic).toHaveLength(9 + 18); // whole file except the hunk
+  });
+});
+
+// ---------------------------------------------------------------------------
 
 describe("windowing math", () => {
   test("line rows have fixed height; total size is predictable", () => {
