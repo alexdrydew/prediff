@@ -48,7 +48,12 @@ import {
 import { RevisionStore } from "../store/revisions";
 import { EventHub } from "./events";
 import { RepoWatcher } from "./watcher";
-import { removeLockfile, writeLockfile } from "./lockfile";
+import {
+  readPreferredPort,
+  removeLockfile,
+  writeLockfile,
+  writePreferredPort,
+} from "./lockfile";
 
 export interface DaemonOptions {
   repoRoot: string;
@@ -125,12 +130,8 @@ export class Daemon {
   async start(): Promise<void> {
     await this.openSession(this.opts.range, null);
 
-    this.server = Bun.serve({
-      port: this.opts.port ?? 0,
-      hostname: "127.0.0.1",
-      idleTimeout: 0, // long-polls and SSE must not be cut off
-      fetch: (req) => this.route(req),
-    });
+    this.server = await this.bind();
+    await writePreferredPort(this.opts.stateDir, this.server.port ?? 0);
 
     await writeLockfile(this.opts.stateDir, {
       pid: process.pid,
@@ -157,6 +158,35 @@ export class Daemon {
     process.on("SIGHUP", () => {
       /* survive terminal close */
     });
+  }
+
+  /**
+   * Bind the HTTP server. Preference order (QA F1 — restarts must not strand
+   * open browser tabs): an explicit `port` option (errors are fatal), else
+   * the port persisted from the previous run (falling back to a random port
+   * if it's taken), else a random port. The bound port is persisted by
+   * `start()` so the next daemon for this repo rebinds it.
+   */
+  private async bind(): Promise<ReturnType<typeof Bun.serve>> {
+    const serve = (port: number) =>
+      Bun.serve({
+        port,
+        hostname: "127.0.0.1",
+        idleTimeout: 0, // long-polls and SSE must not be cut off
+        fetch: (req) => this.route(req),
+      });
+
+    if (this.opts.port !== undefined) return serve(this.opts.port);
+    const preferred = await readPreferredPort(this.opts.stateDir);
+    if (preferred !== null) {
+      try {
+        return serve(preferred);
+      } catch {
+        // Port taken (or otherwise unbindable): fall back to a random port.
+        // start() persists the new one, so future restarts stay stable again.
+      }
+    }
+    return serve(0);
   }
 
   /** Release resources without exiting the process (used by in-process tests). */

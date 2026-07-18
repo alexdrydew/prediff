@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import type { Lockfile } from "../types";
 import { readJson, writeJsonAtomic } from "../store/atomic";
-import { lockfilePath } from "../store/paths";
+import { lockfilePath, portFilePath } from "../store/paths";
 
 export async function readLockfile(stateDir: string): Promise<Lockfile | null> {
   return readJson<Lockfile>(lockfilePath(stateDir));
@@ -15,6 +15,22 @@ export async function writeLockfile(stateDir: string, lock: Lockfile): Promise<v
 
 export async function removeLockfile(stateDir: string): Promise<void> {
   await fs.rm(lockfilePath(stateDir), { force: true });
+}
+
+/**
+ * Port persistence (QA F1): the port survives daemon shutdown so a restarted
+ * daemon rebinds it and already-open browser tabs reconnect automatically.
+ */
+export async function readPreferredPort(stateDir: string): Promise<number | null> {
+  const stored = await readJson<{ port: number }>(portFilePath(stateDir));
+  const port = stored?.port;
+  return typeof port === "number" && Number.isInteger(port) && port > 0 && port < 65536
+    ? port
+    : null;
+}
+
+export async function writePreferredPort(stateDir: string, port: number): Promise<void> {
+  await writeJsonAtomic(portFilePath(stateDir), { port });
 }
 
 export function pidAlive(pid: number): boolean {

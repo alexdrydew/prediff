@@ -47,6 +47,13 @@ export function lockfilePath(stateDir_: string): string {
   return path.join(stateDir_, "daemon.json");
 }
 
+/** Last port the daemon successfully bound (survives daemon shutdown, unlike
+ * the lockfile) — so a restart can rebind the same port and already-open
+ * browser tabs reconnect instead of stranding (QA F1). */
+export function portFilePath(stateDir_: string): string {
+  return path.join(stateDir_, "port.json");
+}
+
 export function daemonLogPath(stateDir_: string): string {
   return path.join(stateDir_, "daemon.log");
 }
