@@ -94,28 +94,40 @@ mutation):
   "session_id": "…",
   "range": "working",
   "generation": 3,              // bumped each diff refresh
-  "review_state": "reviewing",  // reviewing | submitted
+  "session_state": "reviewing", // reviewing | ready   (ready = "Mark Ready")
+  "revision": 3,                // current revision number; history retained
   "comments": [{
     "id": "…", "file": "src/x.ts", "line": 42, "end_line": 45,
-    "side": "new", "text": "…",
-    "state": "open",            // open | resolved | outdated
-    "generation": 2,            // diff generation it was written against
+    "side": "new", "text": "…", "tag": "must-fix",  // must-fix|suggestion|question|nit|null
+    "state": "submitted",       // draft | submitted | addressed | resolved | orphaned
+    "revision": 2,              // revision it was written against
     "anchor": { "context_before": [...], "context_after": [...] },
     "replies": [{ "from": "agent", "text": "Fixed in …" }]
-  }]
+  }],
+  "viewed_files": ["src/x.ts"]  // per-file "viewed" checkboxes, persisted
 }
 ```
 
-**Comment anchoring across generations:** when the diff refreshes, comments
-re-anchor by matching their stored context lines (like git apply's fuzzy
-matching). Comments that no longer match are shown in an "outdated" section,
-never dropped.
+The review model follows the design spec (`design/prediff-interaction-spec.md`
+— authoritative for all UX semantics):
 
-**Review lifecycle:** comments are live to the agent the instant they're
-written (no batching requirement), but the UI offers an explicit
-**"Send to agent / Finish review"** action that flips `review_state` to
-`submitted` — that's what `prediff wait` primarily watches. Exact semantics to
-be refined by the UX design spec.
+- **Revisions, not silent refreshes.** Each diff recompute is a numbered
+  revision; raw diff text per revision is persisted (compressed) so older
+  revisions stay viewable. The UI never auto-applies a new revision — it
+  queues behind a banner; the reviewer switches when ready.
+- **Comment lifecycle** (spec §4.2): `draft` (autosaved server-side, not yet
+  visible to the agent) → `submitted` (via **Send Feedback**, which batches
+  all drafts and wakes the agent; per-comment "send now" also exists) →
+  `addressed` (automatic when a new revision *modifies* the anchored region)
+  → `resolved` (reviewer confirms). Re-anchoring outcomes per revision:
+  unchanged/shifted → follows silently; modified → `addressed`;
+  deleted/unmatchable → `orphaned` (surfaced for triage, never dropped).
+- **Session actions** (spec §5): **Send Feedback** (the loop-closing action,
+  many times per session) and **Mark Ready** (session complete; developer
+  pushes manually outside the tool). No GitHub-style "submit review".
+- `prediff wait` returns on: feedback batch (exit 2), Mark Ready (exit 0),
+  or timeout (exit 3). `prediff open --scope "<stated task>"` passes the
+  agent's stated scope so the UI can flag files outside it (spec §9.4).
 
 ### 5. Frontend
 
@@ -160,11 +172,11 @@ and (via Playwright) render timings.
 - **One current session per repo** (open question 1): `open` with a different
   range replaces the current session; old session files stay on disk but
   aren't API-addressable. Revisit if multi-range review turns out to matter.
-- **Re-`open` of a submitted session resets it to `reviewing`** (a new review
-  round). Final lifecycle semantics deferred to the UX design spec.
-- Comments have a third state, `outdated`, for failed re-anchors; an
-  outdated comment can recover to `open` if a later generation matches again.
-  Resolved comments that fail re-anchoring stay `resolved`.
+- **Re-`open` of a ready session resets it to `reviewing`** (a new review
+  round), consistent with the spec's sessions-are-resumable model (§9.1).
+- Phase-1 comment states `open`/`outdated` were superseded by the design
+  spec's five-state lifecycle (see above); `open` maps to `submitted`,
+  `outdated` to `orphaned`.
 
 ## Open questions (for architecture review)
 
