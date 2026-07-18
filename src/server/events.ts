@@ -1,13 +1,20 @@
 /** SSE hub: fan-out of server events to browser tabs (and anything else). */
 
 export type EventName =
-  | "generation"
+  /** A new revision exists. The client decides when to switch to it
+   * (spec §6.1/§6.3) — the server never assumes it was applied. */
+  | "revision"
   | "comment.created"
   | "comment.updated"
   | "comment.resolved"
   | "comment.deleted"
-  | "review.submitted"
-  | "session.changed";
+  /** A feedback batch (Send Feedback or per-comment send-now) was sent. */
+  | "feedback.sent"
+  /** Developer clicked Mark Ready (spec §5.2). */
+  | "session.ready"
+  | "session.changed"
+  /** Per-file viewed flags changed. */
+  | "viewed.changed";
 
 interface Client {
   controller: ReadableStreamDefaultController<Uint8Array>;

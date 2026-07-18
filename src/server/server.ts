@@ -1,14 +1,19 @@
 /**
  * Per-repo daemon: Bun.serve JSON API + SSE + static UI + repo watcher +
- * idle-TTL self-shutdown. See ARCHITECTURE.md §2.
+ * idle-TTL self-shutdown. See ARCHITECTURE.md §2 and §4; review-model
+ * semantics per design/prediff-interaction-spec.md.
  */
 
 import path from "node:path";
 import type {
+  CommentTag,
   DiffManifest,
+  FeedbackBatch,
   FileDiff,
   ManifestFile,
+  MarkReadyResult,
   OpenResult,
+  ReviewComment,
   Session,
   Side,
   StatusResult,
@@ -18,20 +23,27 @@ import type {
 import {
   computeFileDiff,
   computeManifest,
+  computeRawDiff,
+  parseUnifiedDiff,
   resolveRange,
   sideContent,
+  splitFileSections,
   type ResolvedRange,
 } from "../git/diff";
-import { buildAnchor, reanchor } from "../store/anchor";
+import { buildAnchor, reanchorOutcome } from "../store/anchor";
 import {
   SessionStore,
   addComment,
   addReply,
+  commentCounts,
   deleteComment,
   findComment,
   resolveComment,
+  setViewed,
+  submitComments,
   type NewCommentInput,
 } from "../store/session";
+import { RevisionStore } from "../store/revisions";
 import { EventHub } from "./events";
 import { RepoWatcher } from "./watcher";
 import { removeLockfile, writeLockfile } from "./lockfile";
@@ -48,8 +60,17 @@ export interface DaemonOptions {
 const PUBLIC_DIR = path.join(import.meta.dir, "..", "..", "public");
 const UI_PATH = path.join(PUBLIC_DIR, "index.html");
 const TTL_CHECK_MS = 60_000;
-/** Max entries in the per-generation file-diff LRU cache. */
+/** Max entries in the per-revision file-diff LRU cache. */
 const FILE_DIFF_CACHE_MAX = 256;
+
+const COMMENT_TAGS: ReadonlySet<string> = new Set(["must-fix", "suggestion", "question", "nit"]);
+const COMMENT_STATES: ReadonlySet<string> = new Set([
+  "draft",
+  "submitted",
+  "addressed",
+  "resolved",
+  "orphaned",
+]);
 
 interface JsonBody {
   [key: string]: unknown;
@@ -57,10 +78,13 @@ interface JsonBody {
 
 export class Daemon {
   private readonly store: SessionStore;
+  private readonly revisions: RevisionStore;
   private readonly hub = new EventHub();
   private session!: Session;
   private range!: ResolvedRange;
   private manifest!: DiffManifest;
+  /** Raw diff text of the current revision (also persisted, gzipped). */
+  private rawDiff = "";
   private watcher: RepoWatcher;
   private server: ReturnType<typeof Bun.serve> | null = null;
   private lastActivity = Date.now();
@@ -69,10 +93,9 @@ export class Daemon {
   /** Repo change-signature the current manifest was computed at (see openSession). */
   private manifestSignature: string | null = null;
   /**
-   * Per-generation LRU cache for /api/diff/file responses, keyed by
-   * path + force flag. Cleared whenever the manifest is recomputed with a
-   * different result (generation bump) or the session/range changes, so an
-   * entry is implicitly keyed by (generation, path).
+   * Per-revision LRU cache for /api/diff/file responses (current revision
+   * only), keyed by path + force flag. Cleared on every revision bump or
+   * session/range change.
    */
   private readonly fileDiffCache = new Map<string, FileDiff>();
   /** Diagnostic counters (exposed on /api/health, used by tests). */
@@ -84,6 +107,7 @@ export class Daemon {
 
   constructor(private readonly opts: DaemonOptions) {
     this.store = new SessionStore(opts.stateDir);
+    this.revisions = new RevisionStore(opts.stateDir);
     this.watcher = new RepoWatcher(opts.repoRoot, () => {
       if (this.range.targetRef === null || this.range.targetRef === ":index") {
         void this.refresh();
@@ -97,7 +121,7 @@ export class Daemon {
   }
 
   async start(): Promise<void> {
-    await this.openSession(this.opts.range);
+    await this.openSession(this.opts.range, null);
 
     this.server = Bun.serve({
       port: this.opts.port ?? 0,
@@ -133,12 +157,18 @@ export class Daemon {
     });
   }
 
-  async shutdown(reason: string): Promise<never> {
-    console.log(`[prediff] shutting down: ${reason}`);
+  /** Release resources without exiting the process (used by in-process tests). */
+  async close(): Promise<void> {
     this.watcher.stop();
     if (this.ttlTimer) clearInterval(this.ttlTimer);
     await removeLockfile(this.opts.stateDir);
     this.server?.stop(true);
+    this.server = null;
+  }
+
+  async shutdown(reason: string): Promise<never> {
+    console.log(`[prediff] shutting down: ${reason}`);
+    await this.close();
     process.exit(0);
   }
 
@@ -146,7 +176,7 @@ export class Daemon {
   // Session / diff lifecycle
 
   /** Create or reuse the current session for `rangeSpec`, then refresh. */
-  private async openSession(rangeSpec: string): Promise<void> {
+  private async openSession(rangeSpec: string, scope: string | null): Promise<void> {
     // Capture the change signature BEFORE computing the manifest: anything
     // that changes afterwards is guaranteed to produce a mismatch later.
     const signature = await this.watcher.computeSignature();
@@ -154,17 +184,42 @@ export class Daemon {
     const existing = await this.store.loadCurrent();
     if (existing && existing.range === rangeSpec) {
       this.session = existing;
+      if (scope !== null && scope !== this.session.scope) {
+        this.session.scope = scope;
+        await this.store.save(this.session);
+      }
     } else {
-      this.session = await this.store.create(this.opts.repoRoot, rangeSpec);
+      this.session = await this.store.create(this.opts.repoRoot, rangeSpec, scope);
       this.hub.broadcast("session.changed", { session_id: this.session.session_id });
     }
     this.stats.manifest_computes++;
-    this.manifest = await computeManifest(this.opts.repoRoot, this.range, this.session.generation);
+    [this.manifest, this.rawDiff] = await Promise.all([
+      computeManifest(this.opts.repoRoot, this.range, this.session.revision),
+      computeRawDiff(this.opts.repoRoot, this.range),
+    ]);
     this.manifestSignature = signature;
     this.fileDiffCache.clear();
+    await this.persistRevision();
   }
 
-  /** Recompute the diff; bump generation + re-anchor comments if it changed. */
+  /**
+   * Persist the current revision's snapshot. If a snapshot for this number
+   * already exists but the diff has drifted (daemon restarted after edits,
+   * before any refresh bumped the number), overwrite it so history always
+   * matches what /api/diff reports for that revision.
+   */
+  private async persistRevision(): Promise<void> {
+    const existing = await this.revisions.load(this.session.session_id, this.session.revision);
+    if (existing && existing.raw_diff === this.rawDiff) return;
+    await this.revisions.save(this.session.session_id, {
+      revision: this.session.revision,
+      created_at: new Date().toISOString(),
+      manifest: this.manifest,
+      raw_diff: this.rawDiff,
+    });
+  }
+
+  /** Recompute the diff; bump revision + re-anchor comments if it changed. */
   async refresh(): Promise<boolean> {
     // Serialize concurrent refreshes (watcher + explicit CLI refresh).
     if (this.refreshing) return this.refreshing;
@@ -178,26 +233,57 @@ export class Daemon {
     const signature = await this.watcher.computeSignature();
     this.range = await resolveRange(this.opts.repoRoot, this.session.range);
     this.stats.manifest_computes++;
-    const next = await computeManifest(this.opts.repoRoot, this.range, this.session.generation);
+    const [next, raw] = await Promise.all([
+      computeManifest(this.opts.repoRoot, this.range, this.session.revision),
+      computeRawDiff(this.opts.repoRoot, this.range),
+    ]);
     this.manifestSignature = signature;
-    if (filesSignature(next.files) === filesSignature(this.manifest.files)) {
-      return false;
-    }
-    this.session.generation += 1;
-    next.generation = this.session.generation;
+    // Raw diff text is the authoritative change detector — it catches
+    // content-only edits that leave every per-file line count identical.
+    if (raw === this.rawDiff) return false;
+
+    const previousSections = splitFileSections(this.rawDiff);
+    this.session.revision += 1;
+    next.revision = this.session.revision;
     this.manifest = next;
+    this.rawDiff = raw;
     this.fileDiffCache.clear();
+    await this.persistRevision();
+
+    // Viewed flags survive revisions, but a file whose diff content changed
+    // (or left the diff) needs another look — reset its flag (spec §2/§6).
+    const sections = splitFileSections(raw);
+    const stillViewed = this.session.viewed_files.filter(
+      (f) => sections.has(f) && sections.get(f) === previousSections.get(f),
+    );
+    const viewedChanged = stillViewed.length !== this.session.viewed_files.length;
+    this.session.viewed_files = stillViewed;
+
     await this.reanchorComments();
     await this.store.save(this.session);
-    this.hub.broadcast("generation", {
-      generation: this.session.generation,
+    this.hub.broadcast("revision", {
+      revision: this.session.revision,
       files: this.manifest.files.length,
       additions: this.manifest.additions,
       deletions: this.manifest.deletions,
     });
+    if (viewedChanged) {
+      this.hub.broadcast("viewed.changed", { viewed_files: this.session.viewed_files });
+    }
     return true;
   }
 
+  /**
+   * Re-anchor every comment against the new revision (spec §6.4):
+   *  - unchanged/shifted → follows silently, state unchanged;
+   *  - anchored region modified → submitted/addressed become `addressed`
+   *    (drafts stay drafts — the agent never saw them, so nothing was
+   *    "responded to"; resolved stay resolved — they're settled);
+   *  - deleted/unmatchable → `orphaned` (never dropped). Resolved comments
+   *    are exempt: re-surfacing settled feedback would be noise.
+   *  - orphaned comments are left for the reviewer to triage manually
+   *    (re-anchor or dismiss, spec §6.4) — no automatic resurrection.
+   */
   private async reanchorComments(): Promise<void> {
     const contentCache = new Map<string, string[] | null>();
     const content = async (file: string, side: Side): Promise<string[] | null> => {
@@ -209,16 +295,29 @@ export class Daemon {
     };
 
     for (const comment of this.session.comments) {
+      if (comment.state === "resolved" || comment.state === "orphaned") continue;
       if (comment.anchor.lines.length === 0) continue; // nothing to match against
       const lines = await content(comment.file, comment.side);
-      const match = lines ? reanchor(comment.anchor, lines, comment.line) : null;
-      if (match) {
-        comment.line = match.line;
-        comment.end_line = match.end_line;
-        comment.generation = this.session.generation;
-        if (comment.state === "outdated") comment.state = "open";
-      } else if (comment.state === "open") {
-        comment.state = "outdated";
+      const outcome = lines
+        ? reanchorOutcome(comment.anchor, lines, comment.line)
+        : ({ kind: "lost" } as const);
+
+      if (outcome.kind === "lost") {
+        comment.state = "orphaned";
+        comment.updated_at = new Date().toISOString();
+        continue;
+      }
+      comment.line = outcome.line;
+      comment.end_line = outcome.end_line;
+      comment.revision = this.session.revision;
+      // Refresh the anchor so future re-anchors track the current content.
+      comment.anchor = buildAnchor(lines!, outcome.line, outcome.end_line);
+      if (
+        outcome.kind === "modified" &&
+        (comment.state === "submitted" || comment.state === "addressed")
+      ) {
+        comment.state = "addressed";
+        comment.updated_at = new Date().toISOString();
       }
     }
   }
@@ -270,19 +369,25 @@ export class Daemon {
     if (pathname === "/api/open" && method === "POST") {
       const body = await readBody(req);
       const range = typeof body["range"] === "string" ? body["range"] : this.session.range;
+      const scope = typeof body["scope"] === "string" ? body["scope"] : null;
       if (range !== this.session.range) {
-        await this.openSession(range);
+        await this.openSession(range, scope);
       } else {
+        if (scope !== null && scope !== this.session.scope) {
+          this.session.scope = scope;
+          await this.store.save(this.session);
+          this.hub.broadcast("session.changed", { session_id: this.session.session_id });
+        }
         // Warm open: skip the manifest recompute entirely when the repo's
         // change signature still matches the one the manifest was built at.
         const signature = await this.watcher.computeSignature();
         if (this.manifestSignature === null || signature !== this.manifestSignature) {
           await this.refresh();
         }
-        if (this.session.review_state === "submitted") {
-          // Re-opening a submitted session starts a new review round.
-          this.session.review_state = "reviewing";
-          delete this.session.submitted_at;
+        if (this.session.session_state === "ready") {
+          // Re-opening a ready session starts a new review round.
+          this.session.session_state = "reviewing";
+          delete this.session.ready_at;
           await this.store.save(this.session);
           this.hub.broadcast("session.changed", { session_id: this.session.session_id });
         }
@@ -293,6 +398,8 @@ export class Daemon {
         files: this.manifest.files.length,
         additions: this.manifest.additions,
         deletions: this.manifest.deletions,
+        revision: this.session.revision,
+        session_state: this.session.session_state,
       };
       return json(result);
     }
@@ -301,11 +408,28 @@ export class Daemon {
 
     if (pathname === "/api/status") return json(this.status());
 
-    if (pathname === "/api/diff") return json(this.manifest);
+    if (pathname === "/api/revisions") {
+      const available = await this.revisions.list(this.session.session_id);
+      return json({ current: this.session.revision, available });
+    }
+
+    if (pathname === "/api/diff") {
+      const revision = parseRevision(url);
+      if (revision instanceof Response) return revision;
+      if (revision === null || revision === this.session.revision) return json(this.manifest);
+      const snapshot = await this.revisions.load(this.session.session_id, revision);
+      if (!snapshot) return json({ error: `revision not found: ${revision}` }, 404);
+      return json(snapshot.manifest);
+    }
 
     if (pathname === "/api/diff/file") {
       const filePath = url.searchParams.get("path");
       if (!filePath) return json({ error: "missing ?path=" }, 400);
+      const revision = parseRevision(url);
+      if (revision instanceof Response) return revision;
+      if (revision !== null && revision !== this.session.revision) {
+        return this.historicalFileDiff(revision, filePath);
+      }
       const file = this.manifest.files.find((f) => f.path === filePath);
       if (!file) return json({ error: `not in diff: ${filePath}` }, 404);
       const force = url.searchParams.get("force") === "1";
@@ -313,18 +437,14 @@ export class Daemon {
     }
 
     if (pathname === "/api/comments" && method === "GET") {
-      const unresolved = url.searchParams.get("unresolved") === "1";
-      const comments = unresolved
-        ? this.session.comments.filter((c) => c.state !== "resolved")
-        : this.session.comments;
-      return json({ comments });
+      return json({ comments: this.filterComments(url) });
     }
 
     if (pathname === "/api/comments" && method === "POST") {
       return this.createComment(await readBody(req));
     }
 
-    const commentMatch = /^\/api\/comments\/([^/]+)(?:\/(resolve|reply))?$/.exec(pathname);
+    const commentMatch = /^\/api\/comments\/([^/]+)(?:\/(resolve|reply|send))?$/.exec(pathname);
     if (commentMatch) {
       const [, id = "", action] = commentMatch;
       if (method === "POST" && action === "resolve") {
@@ -333,6 +453,7 @@ export class Daemon {
       if (method === "POST" && action === "reply") {
         return this.replyComment(id, await readBody(req));
       }
+      if (method === "POST" && action === "send") return this.sendComment(id);
       if (method === "PATCH" && !action) return this.updateComment(id, await readBody(req));
       if (method === "DELETE" && !action) return this.deleteComment(id);
       if (method === "GET" && !action) {
@@ -341,19 +462,23 @@ export class Daemon {
       }
     }
 
-    if (pathname === "/api/review/submit" && method === "POST") {
-      this.session.review_state = "submitted";
-      this.session.submitted_at = new Date().toISOString();
-      await this.store.save(this.session);
-      this.hub.broadcast("review.submitted", { session_id: this.session.session_id });
-      return json({ ok: true, review_state: this.session.review_state });
+    if (pathname === "/api/feedback/send" && method === "POST") {
+      return this.sendFeedback();
+    }
+
+    if (pathname === "/api/session/mark-ready" && method === "POST") {
+      return this.markReady();
+    }
+
+    if (pathname === "/api/viewed" && method === "POST") {
+      return this.setViewed(await readBody(req));
     }
 
     if (pathname === "/api/refresh" && method === "POST") {
       const changed = await this.refresh();
       return json({
         changed,
-        generation: this.session.generation,
+        revision: this.session.revision,
         files: this.manifest.files.length,
         additions: this.manifest.additions,
         deletions: this.manifest.deletions,
@@ -371,8 +496,8 @@ export class Daemon {
   }
 
   /**
-   * Per-file hunks with an in-memory LRU cache for the current generation
-   * (the cache is cleared on every generation bump / session change), so
+   * Per-file hunks with an in-memory LRU cache for the current revision
+   * (the cache is cleared on every revision bump / session change), so
    * collapsing and re-expanding a file doesn't re-pay the git subprocess.
    */
   private async fileDiff(file: ManifestFile, force: boolean): Promise<FileDiff> {
@@ -395,25 +520,58 @@ export class Daemon {
     return result;
   }
 
-  private status(): StatusResult {
-    const counts = { total: 0, open: 0, resolved: 0, outdated: 0 };
-    for (const c of this.session.comments) {
-      counts.total++;
-      counts[c.state]++;
+  /** Serve a file's hunks for an older revision from its stored raw diff. */
+  private async historicalFileDiff(revision: number, filePath: string): Promise<Response> {
+    const snapshot = await this.revisions.load(this.session.session_id, revision);
+    if (!snapshot) return json({ error: `revision not found: ${revision}` }, 404);
+    const file = snapshot.manifest.files.find((f) => f.path === filePath);
+    if (!file) return json({ error: `not in diff at revision ${revision}: ${filePath}` }, 404);
+    const section = splitFileSections(snapshot.raw_diff).get(filePath) ?? "";
+    const parsed = parseUnifiedDiff(section);
+    const result: FileDiff = {
+      path: file.path,
+      binary: file.binary || parsed.binary,
+      large: false, // history is served whole; the snapshot already paid the cost
+      hunks: parsed.hunks,
+    };
+    if (file.old_path) result.old_path = file.old_path;
+    return json(result);
+  }
+
+  private filterComments(url: URL): ReviewComment[] {
+    let comments = this.session.comments;
+    if (url.searchParams.get("exclude_drafts") === "1") {
+      comments = comments.filter((c) => c.state !== "draft");
     }
+    if (url.searchParams.get("unresolved") === "1") {
+      comments = comments.filter((c) => c.state !== "resolved");
+    }
+    const stateFilter = url.searchParams.get("state");
+    if (stateFilter) {
+      const states = new Set(stateFilter.split(","));
+      comments = comments.filter((c) => states.has(c.state));
+    }
+    return comments;
+  }
+
+  private status(): StatusResult {
     return {
       session_id: this.session.session_id,
       range: this.session.range,
-      review_state: this.session.review_state,
-      generation: this.session.generation,
+      session_state: this.session.session_state,
+      revision: this.session.revision,
       url: this.url,
-      comments: counts,
+      scope: this.session.scope,
+      comments: commentCounts(this.session),
+      viewed_files: this.session.viewed_files.length,
     };
   }
 
   // -------------------------------------------------------------------------
   // Comment handlers
 
+  /** Comments are always created as drafts (spec §4.2); submission happens
+   * via /api/feedback/send or /api/comments/:id/send. */
   private async createComment(body: JsonBody): Promise<Response> {
     const file = body["file"];
     const line = body["line"];
@@ -424,8 +582,10 @@ export class Daemon {
     const side: Side = body["side"] === "old" ? "old" : "new";
     const endLine = typeof body["end_line"] === "number" ? body["end_line"] : line;
     if (endLine < line || line < 1) return json({ error: "invalid line range" }, 400);
+    const tag = parseTag(body["tag"]);
+    if (tag instanceof Response) return tag;
 
-    const input: NewCommentInput = { file, line, end_line: endLine, side, text };
+    const input: NewCommentInput = { file, line, end_line: endLine, side, text, tag };
     const content = await sideContent(this.opts.repoRoot, this.range, side, file);
     const anchor = content
       ? buildAnchor(content, line, endLine)
@@ -437,13 +597,17 @@ export class Daemon {
   }
 
   private async resolveComment(id: string, body: JsonBody): Promise<Response> {
+    const existing = findComment(this.session, id);
+    if (!existing) return json({ error: "comment not found" }, 404);
+    if (existing.state === "draft") {
+      return json({ error: "cannot resolve a draft comment (send it first)" }, 400);
+    }
     const replyText = typeof body["reply"] === "string" ? body["reply"] : undefined;
     const comment = resolveComment(
       this.session,
       id,
       replyText !== undefined ? { from: "agent", text: replyText } : undefined,
     );
-    if (!comment) return json({ error: "comment not found" }, 404);
     await this.store.save(this.session);
     this.hub.broadcast("comment.resolved", { comment });
     return json(comment);
@@ -460,12 +624,37 @@ export class Daemon {
     return json(comment);
   }
 
+  /**
+   * PATCH /api/comments/:id — draft autosave (text/tag) and reviewer state
+   * changes (resolve, or reopen back to submitted). Draft → submitted must go
+   * through the send endpoints so the batch is recorded and `wait` wakes.
+   */
   private async updateComment(id: string, body: JsonBody): Promise<Response> {
     const comment = findComment(this.session, id);
     if (!comment) return json({ error: "comment not found" }, 404);
     if (typeof body["text"] === "string") comment.text = body["text"];
-    if (body["state"] === "open" || body["state"] === "resolved") {
-      comment.state = body["state"];
+    if ("tag" in body) {
+      const tag = parseTag(body["tag"]);
+      if (tag instanceof Response) return tag;
+      comment.tag = tag;
+    }
+    const state = body["state"];
+    if (state !== undefined) {
+      if (typeof state !== "string" || !COMMENT_STATES.has(state)) {
+        return json({ error: `invalid state: ${String(state)}` }, 400);
+      }
+      if (state !== comment.state) {
+        if (comment.state === "draft" || state === "draft") {
+          return json(
+            { error: "drafts change state via /api/feedback/send or /api/comments/:id/send" },
+            400,
+          );
+        }
+        if (state !== "resolved" && state !== "submitted") {
+          return json({ error: `cannot set state to ${state} (resolved or submitted only)` }, 400);
+        }
+        comment.state = state;
+      }
     }
     comment.updated_at = new Date().toISOString();
     await this.store.save(this.session);
@@ -481,38 +670,110 @@ export class Daemon {
   }
 
   // -------------------------------------------------------------------------
+  // Session actions (spec §5)
+
+  /** "Send Feedback": every draft becomes submitted as one batch. */
+  private async sendFeedback(): Promise<Response> {
+    const drafts = this.session.comments.filter((c) => c.state === "draft");
+    if (drafts.length === 0) return json({ error: "no draft comments to send" }, 400);
+    const batch = submitComments(this.session, drafts);
+    await this.store.save(this.session);
+    this.hub.broadcast("feedback.sent", { batch, comments: drafts });
+    return json({ batch, comments: drafts });
+  }
+
+  /** "Send this comment now": a single-comment batch (spec §5.1). */
+  private async sendComment(id: string): Promise<Response> {
+    const comment = findComment(this.session, id);
+    if (!comment) return json({ error: "comment not found" }, 404);
+    if (comment.state !== "draft") {
+      return json({ error: `not a draft (state: ${comment.state})` }, 400);
+    }
+    const batch = submitComments(this.session, [comment]);
+    await this.store.save(this.session);
+    this.hub.broadcast("feedback.sent", { batch, comments: [comment] });
+    return json(comment);
+  }
+
+  /** "Mark Ready": allowed with open comments — flagged, not blocked (§5.2). */
+  private async markReady(): Promise<Response> {
+    this.session.session_state = "ready";
+    this.session.ready_at = new Date().toISOString();
+    await this.store.save(this.session);
+    this.hub.broadcast("session.ready", { session_id: this.session.session_id });
+    const result: MarkReadyResult = {
+      ok: true,
+      session_state: "ready",
+      ready_at: this.session.ready_at,
+      comments: commentCounts(this.session),
+    };
+    return json(result);
+  }
+
+  private async setViewed(body: JsonBody): Promise<Response> {
+    const viewed = body["viewed"];
+    if (typeof viewed !== "boolean") return json({ error: "required: viewed (boolean)" }, 400);
+    const files = Array.isArray(body["files"])
+      ? (body["files"] as unknown[])
+      : typeof body["file"] === "string"
+        ? [body["file"]]
+        : null;
+    if (!files || files.some((f) => typeof f !== "string")) {
+      return json({ error: "required: file (string) or files (string[])" }, 400);
+    }
+    let changed = false;
+    for (const file of files as string[]) {
+      changed = setViewed(this.session, file, viewed) || changed;
+    }
+    if (changed) {
+      await this.store.save(this.session);
+      this.hub.broadcast("viewed.changed", { viewed_files: this.session.viewed_files });
+    }
+    return json({ viewed_files: this.session.viewed_files });
+  }
+
+  // -------------------------------------------------------------------------
   // Bounded long-poll for agents
 
+  /**
+   * Returns on: Mark Ready (`ready`), a feedback batch or send-now
+   * (`feedback`, with that batch's comments), or timeout. Drafts never
+   * trigger a wait — they're invisible to the agent until sent.
+   */
   private wait(url: URL): Promise<Response> {
     const timeoutS = Number(url.searchParams.get("timeout") ?? "60");
     const timeoutMs = Math.min(Math.max(timeoutS, 0), 3600) * 1_000;
 
-    const baselineIds = new Set(this.session.comments.map((c) => c.id));
-    const result = (reason: WaitReason): WaitResult => ({
+    const result = (reason: WaitReason, batch: FeedbackBatch | null): WaitResult => ({
       reason,
-      review_state: this.session.review_state,
-      generation: this.session.generation,
-      new_comments: this.session.comments.filter((c) => !baselineIds.has(c.id)),
+      session_state: this.session.session_state,
+      revision: this.session.revision,
+      batch_id: batch?.id ?? null,
+      comments: batch
+        ? this.session.comments.filter((c) => batch.comment_ids.includes(c.id))
+        : [],
     });
 
-    if (this.session.review_state === "submitted") {
-      return Promise.resolve(json(result("submitted")));
+    if (this.session.session_state === "ready") {
+      return Promise.resolve(json(result("ready", null)));
     }
 
     return new Promise<Response>((resolve) => {
       let done = false;
-      const finish = (reason: WaitReason) => {
+      const finish = (reason: WaitReason, batch: FeedbackBatch | null) => {
         if (done) return;
         done = true;
         unsubscribe();
         clearTimeout(timer);
         this.lastActivity = Date.now();
-        resolve(json(result(reason)));
+        resolve(json(result(reason, batch)));
       };
-      const timer = setTimeout(() => finish("timeout"), timeoutMs);
-      const unsubscribe = this.hub.onEvent((event) => {
-        if (event === "review.submitted") finish("submitted");
-        else if (event === "comment.created") finish("new-comments");
+      const timer = setTimeout(() => finish("timeout", null), timeoutMs);
+      const unsubscribe = this.hub.onEvent((event, data) => {
+        if (event === "session.ready") finish("ready", null);
+        else if (event === "feedback.sent") {
+          finish("feedback", (data as { batch: FeedbackBatch }).batch);
+        }
       });
     });
   }
@@ -520,8 +781,19 @@ export class Daemon {
 
 // ---------------------------------------------------------------------------
 
-function filesSignature(files: ManifestFile[]): string {
-  return JSON.stringify(files);
+/** Parse ?revision=N; null when absent (= latest). */
+function parseRevision(url: URL): number | null | Response {
+  const raw = url.searchParams.get("revision");
+  if (raw === null) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) return json({ error: `invalid revision: ${raw}` }, 400);
+  return n;
+}
+
+function parseTag(value: unknown): CommentTag | null | Response {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && COMMENT_TAGS.has(value)) return value as CommentTag;
+  return json({ error: `invalid tag: ${String(value)} (must-fix|suggestion|question|nit)` }, 400);
 }
 
 function json(value: unknown, status = 200): Response {

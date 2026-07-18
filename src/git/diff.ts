@@ -169,7 +169,7 @@ function parseNumstat(out: string): NumstatEntry[] {
 export async function computeManifest(
   repo: string,
   range: ResolvedRange,
-  generation: number,
+  revision: number,
 ): Promise<DiffManifest> {
   const [raw, numstat] = await Promise.all([
     git(repo, ["diff", ...DIFF_FLAGS, "--raw", "-z", ...range.diffArgs, "--"]),
@@ -203,7 +203,7 @@ export async function computeManifest(
 
   return {
     range: range.spec,
-    generation,
+    revision,
     files,
     additions: files.reduce((n, f) => n + f.additions, 0),
     deletions: files.reduce((n, f) => n + f.deletions, 0),
@@ -309,6 +309,64 @@ export async function computeFileDiff(
   base.hunks = parsed.hunks;
   if (file.large && opts.force) base.large = false;
   return base;
+}
+
+// ---------------------------------------------------------------------------
+// Raw diff text (persisted per revision so history stays viewable)
+
+/** Full unified diff for the range, exactly as git prints it. */
+export async function computeRawDiff(repo: string, range: ResolvedRange): Promise<string> {
+  const r = await git(repo, ["diff", ...DIFF_FLAGS, "--unified=3", ...range.diffArgs, "--"]);
+  return r.stdout;
+}
+
+/**
+ * Split a multi-file unified diff into per-file sections, keyed by the file's
+ * path as the manifest reports it (new path; old path for deletions).
+ * Used to (a) serve historical per-file hunks and (b) detect which files'
+ * diff content actually changed between revisions (viewed-flag reset).
+ */
+export function splitFileSections(raw: string): Map<string, string> {
+  const sections = new Map<string, string>();
+  if (!raw) return sections;
+  const lines = raw.split("\n");
+  let start = -1;
+  const flush = (end: number) => {
+    if (start === -1) return;
+    const section = lines.slice(start, end).join("\n");
+    const key = sectionPath(lines, start, end);
+    if (key) sections.set(key, section);
+  };
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.startsWith("diff --git ")) {
+      flush(i);
+      start = i;
+    }
+  }
+  flush(lines.length);
+  return sections;
+}
+
+function sectionPath(lines: string[], start: number, end: number): string | null {
+  for (let i = start; i < end; i++) {
+    const line = lines[i]!;
+    if (line.startsWith("+++ b/")) return line.slice("+++ b/".length);
+    if (line.startsWith("rename to ")) return line.slice("rename to ".length);
+    if (line.startsWith("+++ /dev/null")) {
+      // Deletion: fall back to the old path.
+      for (let j = start; j < end; j++) {
+        const l = lines[j]!;
+        if (l.startsWith("--- a/")) return l.slice("--- a/".length);
+      }
+    }
+    if (HUNK_RE.test(line)) break; // past the header; nothing more to find
+  }
+  // No ---/+++ header (binary or mode-only change): parse `diff --git a/X b/X`.
+  const header = lines[start]!.slice("diff --git ".length);
+  const m = /^a\/(.*) b\/\1$/.exec(header); // identical paths (the common case)
+  if (m) return m[1] ?? null;
+  const half = /^a\/.* b\/(.*)$/.exec(header);
+  return half?.[1] ?? null;
 }
 
 // ---------------------------------------------------------------------------

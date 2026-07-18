@@ -34,6 +34,15 @@ export function currentSessionPath(stateDir_: string): string {
   return path.join(stateDir_, "current.json");
 }
 
+/** Per-session revision snapshots: <stateDir>/revisions/<session-id>/<N>.json.gz */
+export function revisionsDir(stateDir_: string, sessionId: string): string {
+  return path.join(stateDir_, "revisions", sessionId);
+}
+
+export function revisionPath(stateDir_: string, sessionId: string, revision: number): string {
+  return path.join(revisionsDir(stateDir_, sessionId), `${revision}.json.gz`);
+}
+
 export function lockfilePath(stateDir_: string): string {
   return path.join(stateDir_, "daemon.json");
 }

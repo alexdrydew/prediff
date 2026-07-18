@@ -1,4 +1,13 @@
-/** Shared domain types for prediff. Schema follows ARCHITECTURE.md §4. */
+/**
+ * Shared domain types for prediff. Schema follows ARCHITECTURE.md §4 and the
+ * review model in design/prediff-interaction-spec.md (§0, §4.2, §5, §6.4).
+ *
+ * On-disk session schema version: 2 (see SCHEMA_VERSION). v1 sessions
+ * (generation/review_state, open/outdated comment states) are migrated
+ * leniently on load — see src/store/session.ts.
+ */
+
+export const SCHEMA_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Diff ranges
@@ -36,7 +45,8 @@ export interface ManifestFile {
 
 export interface DiffManifest {
   range: RangeSpec;
-  generation: number;
+  /** The revision this manifest describes (numbered, spec §0.1). */
+  revision: number;
   files: ManifestFile[];
   additions: number;
   deletions: number;
@@ -75,10 +85,28 @@ export interface FileDiff {
 }
 
 // ---------------------------------------------------------------------------
-// Session / review model
+// Session / review model (spec §0, §4.2, §5)
 
-export type ReviewState = "reviewing" | "submitted";
-export type CommentState = "open" | "resolved" | "outdated";
+/**
+ * Session-level state. `reviewing` is the working state; `ready` means the
+ * developer clicked "Mark Ready" — satisfied, will push manually (spec §5.2).
+ * Re-opening a ready session resets it to `reviewing`.
+ */
+export type SessionState = "reviewing" | "ready";
+
+/**
+ * Comment lifecycle (spec §4.2):
+ *   draft     — written, autosaved server-side, NOT visible to the agent
+ *   submitted — sent via "Send Feedback" (batch) or per-comment send-now
+ *   addressed — a newer revision modified the anchored region
+ *   resolved  — reviewer confirmed; terminal unless explicitly reopened
+ *   orphaned  — anchor deleted / unmatchable in the current revision
+ */
+export type CommentState = "draft" | "submitted" | "addressed" | "resolved" | "orphaned";
+
+/** Optional intent tag (spec §4.3). */
+export type CommentTag = "must-fix" | "suggestion" | "question" | "nit";
+
 export type Side = "old" | "new";
 
 export interface CommentReply {
@@ -103,24 +131,53 @@ export interface ReviewComment {
   side: Side;
   text: string;
   state: CommentState;
-  /** Diff generation the comment was written against (or last re-anchored to). */
-  generation: number;
+  tag: CommentTag | null;
+  /** Revision the comment was written against (or last re-anchored to). */
+  revision: number;
   anchor: CommentAnchor;
   replies: CommentReply[];
+  /** Feedback batch this comment was submitted in (null while draft). */
+  batch_id: string | null;
+  submitted_at?: string;
   created_at: string;
   updated_at: string;
 }
 
+/** One "Send Feedback" action (or a single-comment send-now). */
+export interface FeedbackBatch {
+  id: string;
+  sent_at: string;
+  comment_ids: string[];
+}
+
 export interface Session {
+  schema_version: number;
   session_id: string;
   repo_root: string;
   range: RangeSpec;
-  generation: number;
-  review_state: ReviewState;
+  /** Current revision number; history retained on disk (spec §0.1). */
+  revision: number;
+  session_state: SessionState;
+  /** Agent's stated task scope, from `prediff open --scope` (spec §9.4). */
+  scope: string | null;
+  /** Per-file "viewed" checkboxes; a file resets when its diff changes. */
+  viewed_files: string[];
+  comments: ReviewComment[];
+  feedback_batches: FeedbackBatch[];
   created_at: string;
   updated_at: string;
-  submitted_at?: string;
-  comments: ReviewComment[];
+  ready_at?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Revision history (raw diff + manifest snapshot per revision, spec §9.2)
+
+export interface RevisionSnapshot {
+  revision: number;
+  created_at: string;
+  manifest: DiffManifest;
+  /** Full `git diff` output for this revision (stored gzipped on disk). */
+  raw_diff: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,28 +200,57 @@ export interface OpenResult {
   files: number;
   additions: number;
   deletions: number;
+  revision: number;
+  session_state: SessionState;
+}
+
+export interface CommentCounts {
+  total: number;
+  draft: number;
+  submitted: number;
+  addressed: number;
+  resolved: number;
+  orphaned: number;
 }
 
 export interface StatusResult {
   session_id: string;
   range: RangeSpec;
-  review_state: ReviewState;
-  generation: number;
+  session_state: SessionState;
+  revision: number;
   url: string;
-  comments: {
-    total: number;
-    open: number;
-    resolved: number;
-    outdated: number;
-  };
+  scope: string | null;
+  comments: CommentCounts;
+  /** Number of files currently marked viewed. */
+  viewed_files: number;
 }
 
-export type WaitReason = "submitted" | "new-comments" | "timeout";
+export interface MarkReadyResult {
+  ok: boolean;
+  session_state: SessionState;
+  ready_at: string;
+  comments: CommentCounts;
+}
+
+export interface SendFeedbackResult {
+  batch: FeedbackBatch;
+  comments: ReviewComment[];
+}
+
+export interface RevisionsResult {
+  current: number;
+  /** Revision numbers still on disk (bounded history, oldest pruned). */
+  available: number[];
+}
+
+export type WaitReason = "ready" | "feedback" | "timeout";
 
 export interface WaitResult {
   reason: WaitReason;
-  review_state: ReviewState;
-  generation: number;
-  /** Comments created since the baseline the caller passed. */
-  new_comments: ReviewComment[];
+  session_state: SessionState;
+  revision: number;
+  /** Batch that woke the wait (null on ready/timeout). */
+  batch_id: string | null;
+  /** The batch's comments (empty on ready/timeout). */
+  comments: ReviewComment[];
 }

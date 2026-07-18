@@ -1,9 +1,23 @@
 /**
  * Session persistence. Every mutation goes through `save()` which writes
  * atomically (temp file + rename) — a crash never corrupts or loses state.
+ *
+ * Schema v2 (revision / five-state comment lifecycle). v1 sessions on disk
+ * are migrated leniently on load rather than discarded — state is a local
+ * cache, but comments are the one thing prediff promises never to lose:
+ *   generation → revision, review_state reviewing|submitted → session_state
+ *   reviewing|ready, comment open → submitted, outdated → orphaned.
  */
 
-import type { CommentReply, ReviewComment, Session, Side } from "../types";
+import {
+  SCHEMA_VERSION,
+  type CommentReply,
+  type CommentTag,
+  type FeedbackBatch,
+  type ReviewComment,
+  type Session,
+  type Side,
+} from "../types";
 import { readJson, writeJsonAtomic } from "./atomic";
 import { currentSessionPath, sessionPath } from "./paths";
 
@@ -17,13 +31,15 @@ export interface NewCommentInput {
   end_line?: number;
   side?: Side;
   text: string;
+  tag?: CommentTag | null;
 }
 
 export class SessionStore {
   constructor(readonly stateDir: string) {}
 
   async load(sessionId: string): Promise<Session | null> {
-    return readJson<Session>(sessionPath(this.stateDir, sessionId));
+    const raw = await readJson<Record<string, unknown>>(sessionPath(this.stateDir, sessionId));
+    return raw ? migrateSession(raw) : null;
   }
 
   async loadCurrent(): Promise<Session | null> {
@@ -41,23 +57,71 @@ export class SessionStore {
     await writeJsonAtomic(currentSessionPath(this.stateDir), { session_id: sessionId });
   }
 
-  async create(repoRoot: string, range: string): Promise<Session> {
+  async create(repoRoot: string, range: string, scope: string | null = null): Promise<Session> {
     const now = new Date().toISOString();
     const session: Session = {
+      schema_version: SCHEMA_VERSION,
       session_id: newId("sess"),
       repo_root: repoRoot,
       range,
-      generation: 1,
-      review_state: "reviewing",
+      revision: 1,
+      session_state: "reviewing",
+      scope,
+      viewed_files: [],
+      comments: [],
+      feedback_batches: [],
       created_at: now,
       updated_at: now,
-      comments: [],
     };
     await this.save(session);
     await this.setCurrent(session.session_id);
     return session;
   }
+}
 
+// ---------------------------------------------------------------------------
+// v1 → v2 migration (lenient; idempotent on v2 input)
+
+const V1_COMMENT_STATE: Record<string, ReviewComment["state"]> = {
+  open: "submitted",
+  outdated: "orphaned",
+  resolved: "resolved",
+};
+
+export function migrateSession(raw: Record<string, unknown>): Session {
+  if (raw["schema_version"] === SCHEMA_VERSION) return raw as unknown as Session;
+
+  const now = new Date().toISOString();
+  const v1State = raw["review_state"];
+  const comments = Array.isArray(raw["comments"]) ? (raw["comments"] as Record<string, unknown>[]) : [];
+  const session: Session = {
+    schema_version: SCHEMA_VERSION,
+    session_id: String(raw["session_id"] ?? newId("sess")),
+    repo_root: String(raw["repo_root"] ?? ""),
+    range: String(raw["range"] ?? "working"),
+    revision: typeof raw["generation"] === "number" ? raw["generation"] : 1,
+    session_state: v1State === "submitted" ? "ready" : "reviewing",
+    scope: typeof raw["scope"] === "string" ? raw["scope"] : null,
+    viewed_files: Array.isArray(raw["viewed_files"]) ? (raw["viewed_files"] as string[]) : [],
+    comments: comments.map(migrateComment),
+    feedback_batches: [],
+    created_at: String(raw["created_at"] ?? now),
+    updated_at: String(raw["updated_at"] ?? now),
+  };
+  if (typeof raw["submitted_at"] === "string") session.ready_at = raw["submitted_at"];
+  return session;
+}
+
+function migrateComment(raw: Record<string, unknown>): ReviewComment {
+  const state = V1_COMMENT_STATE[String(raw["state"])] ?? "submitted";
+  const c = raw as unknown as ReviewComment;
+  return {
+    ...c,
+    state,
+    tag: (raw["tag"] as CommentTag | undefined) ?? null,
+    revision: typeof raw["generation"] === "number" ? raw["generation"] : (c.revision ?? 1),
+    batch_id: typeof raw["batch_id"] === "string" ? raw["batch_id"] : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -76,10 +140,12 @@ export function addComment(
     end_line: input.end_line ?? input.line,
     side: input.side ?? "new",
     text: input.text,
-    state: "open",
-    generation: session.generation,
+    state: "draft",
+    tag: input.tag ?? null,
+    revision: session.revision,
     anchor: anchorLines,
     replies: [],
+    batch_id: null,
     created_at: now,
     updated_at: now,
   };
@@ -89,6 +155,32 @@ export function addComment(
 
 export function findComment(session: Session, id: string): ReviewComment | null {
   return session.comments.find((c) => c.id === id) ?? null;
+}
+
+/**
+ * Flip the given draft comments to `submitted` as one feedback batch
+ * (spec §5.1). Returns the recorded batch. Caller checks non-empty.
+ */
+export function submitComments(session: Session, drafts: ReviewComment[]): FeedbackBatch {
+  const now = new Date().toISOString();
+  const batch: FeedbackBatch = {
+    id: newId("fb"),
+    sent_at: now,
+    comment_ids: drafts.map((c) => c.id),
+  };
+  for (const comment of drafts) {
+    comment.state = "submitted";
+    comment.batch_id = batch.id;
+    comment.submitted_at = now;
+    comment.updated_at = now;
+  }
+  session.feedback_batches.push(batch);
+  // New feedback means the developer expects another agent turn.
+  if (session.session_state === "ready") {
+    session.session_state = "reviewing";
+    delete session.ready_at;
+  }
+  return batch;
 }
 
 export function resolveComment(
@@ -123,4 +215,27 @@ export function deleteComment(session: Session, id: string): boolean {
   if (idx === -1) return false;
   session.comments.splice(idx, 1);
   return true;
+}
+
+/** Set/unset a file's viewed flag; returns true when the set changed. */
+export function setViewed(session: Session, file: string, viewed: boolean): boolean {
+  const has = session.viewed_files.includes(file);
+  if (viewed && !has) {
+    session.viewed_files.push(file);
+    return true;
+  }
+  if (!viewed && has) {
+    session.viewed_files = session.viewed_files.filter((f) => f !== file);
+    return true;
+  }
+  return false;
+}
+
+export function commentCounts(session: Session) {
+  const counts = { total: 0, draft: 0, submitted: 0, addressed: 0, resolved: 0, orphaned: 0 };
+  for (const c of session.comments) {
+    counts.total++;
+    counts[c.state]++;
+  }
+  return counts;
 }

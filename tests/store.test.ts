@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writeJsonAtomic, readJson } from "../src/store/atomic";
-import { buildAnchor, reanchor } from "../src/store/anchor";
+import { buildAnchor, reanchor, reanchorOutcome } from "../src/store/anchor";
 import { repoId, sessionPath } from "../src/store/paths";
 import { SessionStore, addComment, resolveComment } from "../src/store/session";
 import { cleanup, tempDir } from "./helpers";
@@ -70,7 +70,7 @@ describe("session store", () => {
       const reloaded = await new SessionStore(stateDir).loadCurrent();
       expect(reloaded!.comments.length).toBe(1);
       expect(reloaded!.comments[0]!.text).toBe("why?");
-      expect(reloaded!.comments[0]!.state).toBe("open");
+      expect(reloaded!.comments[0]!.state).toBe("draft");
 
       resolveComment(session, comment.id, { from: "agent", text: "fixed" });
       await store.save(session);
@@ -122,7 +122,7 @@ describe("re-anchoring", () => {
     expect(reanchor(anchor, many, 5)).toEqual({ line: 5, end_line: 5 });
   });
 
-  test("no match → null (caller marks comment outdated)", () => {
+  test("no match → null (caller marks comment orphaned)", () => {
     const anchor = buildAnchor(content, 4, 4);
     const rewritten = ["completely", "different", "file"];
     expect(reanchor(anchor, rewritten, 4)).toBeNull();
@@ -139,5 +139,53 @@ describe("re-anchoring", () => {
     expect(anchor.context_before).toEqual([]);
     const shifted = ["pad", ...content];
     expect(reanchor(anchor, shifted, 1)).toEqual({ line: 2, end_line: 2 });
+  });
+});
+
+describe("three-outcome re-anchoring (spec §6.4)", () => {
+  const content = ["import x", "", "function foo() {", "  return 1;", "}", "", "const z = 2;"];
+
+  test("unchanged / shifted → match", () => {
+    const anchor = buildAnchor(content, 4, 4);
+    expect(reanchorOutcome(anchor, content, 4)).toEqual({ kind: "match", line: 4, end_line: 4 });
+    expect(reanchorOutcome(anchor, ["a", "b", ...content], 4)).toEqual({
+      kind: "match",
+      line: 6,
+      end_line: 6,
+    });
+  });
+
+  test("anchored line rewritten between intact context → modified", () => {
+    const anchor = buildAnchor(content, 4, 4);
+    const edited = [...content];
+    edited[3] = "  return compute();";
+    expect(reanchorOutcome(anchor, edited, 4)).toEqual({ kind: "modified", line: 4, end_line: 4 });
+  });
+
+  test("region replaced by a longer block → modified, spanning the new block", () => {
+    const anchor = buildAnchor(content, 4, 4);
+    const edited = [...content.slice(0, 3), "  const r = 1;", "  audit(r);", "  return r;", ...content.slice(4)];
+    expect(reanchorOutcome(anchor, edited, 4)).toEqual({ kind: "modified", line: 4, end_line: 6 });
+  });
+
+  test("region deleted with context intact → lost (orphaned, not misattached)", () => {
+    const anchor = buildAnchor(content, 4, 4);
+    const deleted = content.filter((l) => l !== "  return 1;");
+    expect(reanchorOutcome(anchor, deleted, 4)).toEqual({ kind: "lost" });
+  });
+
+  test("file rewritten entirely → lost", () => {
+    const anchor = buildAnchor(content, 4, 4);
+    expect(reanchorOutcome(anchor, ["completely", "different"], 4)).toEqual({ kind: "lost" });
+  });
+
+  test("replacement grown beyond the confidence bound → lost", () => {
+    const anchor = buildAnchor(content, 4, 4);
+    const huge = [
+      ...content.slice(0, 3),
+      ...Array.from({ length: 100 }, (_, i) => `  line${i};`),
+      ...content.slice(4),
+    ];
+    expect(reanchorOutcome(anchor, huge, 4)).toEqual({ kind: "lost" });
   });
 });

@@ -1,7 +1,7 @@
 /**
  * End-to-end: temp git repo → `prediff open` (real CLI, detached daemon) →
- * comment via HTTP → read via CLI → re-anchor across a refresh → submit →
- * `wait` returns with the right exit code → `stop`.
+ * draft comment via HTTP → send feedback → read via CLI → re-anchor across a
+ * refresh → mark ready → `wait` returns with the right exit code → `stop`.
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
@@ -76,7 +76,7 @@ afterAll(async () => {
 });
 
 test("open spawns a detached daemon and prints session info", async () => {
-  const r = await cli(["open", "working", "--json"]);
+  const r = await cli(["open", "working", "--scope", "fix the add function", "--json"]);
   expect(r.code).toBe(0);
   opened = cliJson<OpenResult>(r);
   expect(opened.session_id).toMatch(/^sess_/);
@@ -84,18 +84,26 @@ test("open spawns a detached daemon and prints session info", async () => {
   expect(opened.files).toBe(1);
   expect(opened.additions).toBe(3);
   expect(opened.deletions).toBe(1);
+  expect(opened.revision).toBe(1);
+  expect(opened.session_state).toBe("reviewing");
 }, 20_000);
 
-test("open reuses the live daemon", async () => {
+test("open reuses the live daemon; scope is stored and exposed", async () => {
   const r = await cli(["open", "working", "--json"]);
   const again = cliJson<OpenResult>(r);
   expect(again.url).toBe(opened.url);
   expect(again.session_id).toBe(opened.session_id);
+
+  const session = await http<Session>("/api/session");
+  expect(session.scope).toBe("fix the add function");
+  const status = cliJson<StatusResult>(await cli(["status", "--json"]));
+  expect(status.scope).toBe("fix the add function");
 }, 20_000);
 
 test("manifest and file hunks over HTTP", async () => {
-  const manifest = await http<{ files: { path: string }[]; generation: number }>("/api/diff");
+  const manifest = await http<{ files: { path: string }[]; revision: number }>("/api/diff");
   expect(manifest.files.map((f) => f.path)).toEqual(["src/app.ts"]);
+  expect(manifest.revision).toBe(1);
   const file = await http<{ hunks: { lines: unknown[] }[] }>(
     "/api/diff/file?path=" + encodeURIComponent("src/app.ts"),
   );
@@ -108,41 +116,63 @@ test("UI is served", async () => {
   expect(await res.text()).toContain("prediff");
 });
 
-test("post a comment via HTTP, read it via CLI", async () => {
+test("comments start as drafts, invisible to the agent CLI", async () => {
   const comment = await http<ReviewComment>("/api/comments", {
     method: "POST",
-    body: JSON.stringify({ file: "src/app.ts", line: 2, side: "new", text: "nice fix" }),
+    body: JSON.stringify({
+      file: "src/app.ts",
+      line: 2,
+      side: "new",
+      text: "nice fix",
+      tag: "suggestion",
+    }),
   });
-  expect(comment.state).toBe("open");
+  expect(comment.state).toBe("draft");
+  expect(comment.tag).toBe("suggestion");
   expect(comment.anchor.lines).toEqual(["  return a + b;"]);
 
+  // Drafts are excluded from agent-facing output.
   const r = await cli(["comments", "--json"]);
   expect(r.code).toBe(0);
-  const { comments } = cliJson<{ comments: ReviewComment[] }>(r);
-  expect(comments.length).toBe(1);
-  expect(comments[0]!.text).toBe("nice fix");
+  expect(cliJson<{ comments: ReviewComment[] }>(r).comments).toEqual([]);
 
-  // Durability: comment is on disk immediately.
+  // Durability: the draft is on disk immediately.
   const glob = new Bun.Glob("*/sessions/*.json");
   const files = await Array.fromAsync(glob.scan({ cwd: stateHome, absolute: true }));
   expect(files.length).toBe(1);
   const onDisk = (await Bun.file(files[0]!).json()) as Session;
   expect(onDisk.comments[0]!.text).toBe("nice fix");
+  expect(onDisk.comments[0]!.state).toBe("draft");
 });
 
-test("wait returns 2 on new comments", async () => {
+test("send feedback wakes wait with exit code 2 and the batch's comments", async () => {
   const waiting = cli(["wait", "--timeout", "15", "--json"]);
   await Bun.sleep(300); // let the long-poll register
+
+  // A second draft written while the agent waits — drafts never wake it.
   await http("/api/comments", {
     method: "POST",
     body: JSON.stringify({ file: "src/app.ts", line: 5, side: "new", text: "bump version?" }),
   });
+
+  const sent = await http<{ batch: { id: string; comment_ids: string[] }; comments: ReviewComment[] }>(
+    "/api/feedback/send",
+    { method: "POST" },
+  );
+  expect(sent.batch.comment_ids.length).toBe(2);
+  expect(sent.comments.every((c) => c.state === "submitted")).toBe(true);
+
   const r = await waiting;
   expect(r.code).toBe(2);
   const result = cliJson<WaitResult>(r);
-  expect(result.reason).toBe("new-comments");
-  expect(result.new_comments.length).toBe(1);
-  expect(result.new_comments[0]!.text).toBe("bump version?");
+  expect(result.reason).toBe("feedback");
+  expect(result.batch_id).toBe(sent.batch.id);
+  expect(result.comments.map((c) => c.text).sort()).toEqual(["bump version?", "nice fix"]);
+
+  // Now the agent CLI sees them.
+  const { comments } = cliJson<{ comments: ReviewComment[] }>(await cli(["comments", "--json"]));
+  expect(comments.length).toBe(2);
+  expect(comments.every((c) => c.state === "submitted")).toBe(true);
 }, 20_000);
 
 test("wait times out with exit code 3", async () => {
@@ -151,7 +181,7 @@ test("wait times out with exit code 3", async () => {
   expect(cliJson<WaitResult>(r).reason).toBe("timeout");
 }, 20_000);
 
-test("agent edits file → refresh bumps generation and re-anchors", async () => {
+test("agent edits file → refresh bumps revision and re-anchors", async () => {
   // Insert lines above the commented line; the comment should follow it.
   await write(
     repo,
@@ -160,18 +190,34 @@ test("agent edits file → refresh bumps generation and re-anchors", async () =>
   );
   const r = await cli(["refresh", "--json"]);
   expect(r.code).toBe(0);
-  const refresh = cliJson<{ changed: boolean; generation: number }>(r);
+  const refresh = cliJson<{ changed: boolean; revision: number }>(r);
   expect(refresh.changed).toBe(true);
-  expect(refresh.generation).toBe(2);
+  expect(refresh.revision).toBe(2);
 
   const { comments } = cliJson<{ comments: ReviewComment[] }>(await cli(["comments", "--json"]));
   const first = comments.find((c) => c.text === "nice fix")!;
   expect(first.line).toBe(4); // was 2, shifted by two header lines
-  expect(first.state).toBe("open");
-  expect(first.generation).toBe(2);
+  expect(first.state).toBe("submitted"); // shifted-only: follows silently
+  expect(first.revision).toBe(2);
 }, 20_000);
 
-test("resolve with reply via CLI", async () => {
+test("older revisions stay viewable via ?revision=", async () => {
+  const revs = await http<{ current: number; available: number[] }>("/api/revisions");
+  expect(revs.current).toBe(2);
+  expect(revs.available).toEqual([1, 2]);
+
+  const old = await http<{ revision: number; additions: number }>("/api/diff?revision=1");
+  expect(old.revision).toBe(1);
+  expect(old.additions).toBe(3);
+
+  const oldFile = await http<{ hunks: { lines: { text: string }[] }[] }>(
+    "/api/diff/file?path=" + encodeURIComponent("src/app.ts") + "&revision=1",
+  );
+  const texts = oldFile.hunks.flatMap((h) => h.lines.map((l) => l.text));
+  expect(texts).not.toContain("// prediff e2e"); // revision 1 predates the header
+}, 20_000);
+
+test("resolve with reply via CLI; resolving a draft is rejected", async () => {
   const { comments } = cliJson<{ comments: ReviewComment[] }>(await cli(["comments", "--json"]));
   const target = comments.find((c) => c.text === "bump version?")!;
   const r = await cli(["resolve", target.id, "--reply", "done in latest edit", "--json"]);
@@ -184,27 +230,52 @@ test("resolve with reply via CLI", async () => {
     await cli(["comments", "--json", "--unresolved"]),
   );
   expect(unresolved.comments.map((c) => c.text)).toEqual(["nice fix"]);
-});
 
-test("submit review → wait returns 0 with reason submitted", async () => {
-  const waiting = cli(["wait", "--timeout", "15", "--json"]);
-  await Bun.sleep(300);
-  await http("/api/review/submit", { method: "POST" });
-  const r = await waiting;
-  expect(r.code).toBe(0);
-  expect(cliJson<WaitResult>(r).reason).toBe("submitted");
-
-  const status = cliJson<StatusResult>(await cli(["status", "--json"]));
-  expect(status.review_state).toBe("submitted");
+  // Drafts cannot be resolved.
+  const draft = await http<ReviewComment>("/api/comments", {
+    method: "POST",
+    body: JSON.stringify({ file: "src/app.ts", line: 1, side: "new", text: "temp draft" }),
+  });
+  const rejected = await cli(["resolve", draft.id, "--json"]);
+  expect(rejected.code).not.toBe(0);
+  await http(`/api/comments/${draft.id}`, { method: "DELETE" });
 }, 20_000);
 
-test("comment on a fully rewritten region becomes outdated, never dropped", async () => {
+test("mark ready → wait returns 0 with reason ready", async () => {
+  const waiting = cli(["wait", "--timeout", "15", "--json"]);
+  await Bun.sleep(300);
+  const ready = await http<{ session_state: string; comments: { submitted: number } }>(
+    "/api/session/mark-ready",
+    { method: "POST" },
+  );
+  expect(ready.session_state).toBe("ready");
+  expect(ready.comments.submitted).toBe(1); // allowed with open comments, but counted
+
+  const r = await waiting;
+  expect(r.code).toBe(0);
+  expect(cliJson<WaitResult>(r).reason).toBe("ready");
+
+  const status = cliJson<StatusResult>(await cli(["status", "--json"]));
+  expect(status.session_state).toBe("ready");
+}, 20_000);
+
+test("re-open resets a ready session to reviewing", async () => {
+  const r = await cli(["open", "working", "--json"]);
+  expect(cliJson<OpenResult>(r).session_state).toBe("reviewing");
+  const status = cliJson<StatusResult>(await cli(["status", "--json"]));
+  expect(status.session_state).toBe("reviewing");
+}, 20_000);
+
+test("comment on a fully rewritten region becomes orphaned, never dropped", async () => {
   await write(repo, "src/app.ts", "export const totally = 'different';\n");
   await cli(["refresh", "--json"]);
   const { comments } = cliJson<{ comments: ReviewComment[] }>(await cli(["comments", "--json"]));
   const first = comments.find((c) => c.text === "nice fix")!;
-  expect(first.state).toBe("outdated");
-  expect(comments.length).toBe(2);
+  expect(first.state).toBe("orphaned");
+  const orphanedOnly = cliJson<{ comments: ReviewComment[] }>(
+    await cli(["comments", "--json", "--state", "orphaned"]),
+  );
+  expect(orphanedOnly.comments.map((c) => c.id)).toEqual([first.id]);
 }, 20_000);
 
 test("stop shuts the daemon down and clears the lockfile", async () => {

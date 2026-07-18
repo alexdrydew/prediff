@@ -83,7 +83,7 @@ describe("manifest", () => {
     expect(deleted!.deletions).toBe(1);
 
     expect(manifest.additions).toBeGreaterThan(0);
-    expect(manifest.generation).toBe(1);
+    expect(manifest.revision).toBe(1);
   });
 
   test("staged range equals working here (all changes staged)", async () => {

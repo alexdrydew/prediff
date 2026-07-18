@@ -3,6 +3,9 @@
  * prediff CLI. Commands per ARCHITECTURE.md §1:
  *   open [range] | status | comments | wait | resolve | refresh | stop
  * All support --json. All exit immediately except `wait` (bounded long-poll).
+ *
+ * Agent-facing rule: draft comments are never shown here — they belong to
+ * the reviewer until sent (spec §4.2).
  */
 
 import type { OpenResult, ReviewComment, StatusResult, WaitResult } from "../types";
@@ -10,6 +13,13 @@ import { CliError, api, ensureDaemon, findDaemon, requireRepoRoot } from "./clie
 import { pidAlive } from "../server/lockfile";
 
 const COMMANDS = new Set(["open", "status", "comments", "wait", "resolve", "refresh", "stop", "help"]);
+
+const COMMENT_STATES: ReadonlySet<string> = new Set([
+  "submitted",
+  "addressed",
+  "resolved",
+  "orphaned",
+]);
 
 interface ParsedArgs {
   command: string;
@@ -47,7 +57,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   return { command, positional, flags };
 }
 
-const FLAGS_WITH_VALUE = new Set(["timeout", "reply", "ttl"]);
+const FLAGS_WITH_VALUE = new Set(["timeout", "reply", "ttl", "scope", "state"]);
 
 function out(json: boolean, value: unknown, human: (v: never) => string): void {
   if (json) {
@@ -71,6 +81,7 @@ async function requireDaemon(repoRoot: string) {
 async function cmdOpen(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
   const range = args.positional[0] ?? "working";
+  const scopeFlag = args.flags.get("scope");
   const root = await requireRepoRoot();
   const ttlFlag = args.flags.get("ttl");
   const lock = await ensureDaemon(root, {
@@ -79,11 +90,14 @@ async function cmdOpen(args: ParsedArgs): Promise<number> {
   });
   const result = await api<OpenResult>(lock, "/api/open", {
     method: "POST",
-    body: JSON.stringify({ range }),
+    body: JSON.stringify({
+      range,
+      ...(typeof scopeFlag === "string" ? { scope: scopeFlag } : {}),
+    }),
   });
   out(json, result, (r: OpenResult) =>
     [
-      `prediff session ${r.session_id}`,
+      `prediff session ${r.session_id} (revision ${r.revision})`,
       `  ${r.url}`,
       `  ${r.files} file(s), +${r.additions} -${r.deletions}`,
     ].join("\n"),
@@ -100,10 +114,12 @@ async function cmdStatus(args: ParsedArgs): Promise<number> {
   const status = await api<StatusResult>(lock, "/api/status");
   out(json, status, (s: StatusResult) =>
     [
-      `session ${s.session_id}  range=${s.range}  gen=${s.generation}  state=${s.review_state}`,
+      `session ${s.session_id}  range=${s.range}  revision=${s.revision}  state=${s.session_state}`,
       `  ${s.url}`,
-      `  comments: ${s.comments.total} total, ${s.comments.open} open, ` +
-        `${s.comments.resolved} resolved, ${s.comments.outdated} outdated`,
+      ...(s.scope ? [`  scope: ${s.scope}`] : []),
+      `  comments: ${s.comments.total} total — ${s.comments.draft} draft, ` +
+        `${s.comments.submitted} submitted, ${s.comments.addressed} addressed, ` +
+        `${s.comments.resolved} resolved, ${s.comments.orphaned} orphaned`,
     ].join("\n"),
   );
   return 0;
@@ -111,7 +127,8 @@ async function cmdStatus(args: ParsedArgs): Promise<number> {
 
 function formatComment(c: ReviewComment): string {
   const range = c.line === c.end_line ? `${c.line}` : `${c.line}-${c.end_line}`;
-  const lines = [`[${c.state}] ${c.id} ${c.file}:${range} (${c.side})`, `  ${c.text}`];
+  const tag = c.tag ? ` (${c.tag})` : "";
+  const lines = [`[${c.state}]${tag} ${c.id} ${c.file}:${range} (${c.side})`, `  ${c.text}`];
   for (const r of c.replies) lines.push(`  ↳ (${r.from}) ${r.text}`);
   return lines.join("\n");
 }
@@ -119,8 +136,24 @@ function formatComment(c: ReviewComment): string {
 async function cmdComments(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
   const lock = await requireDaemon(await requireRepoRoot());
-  const unresolved = args.flags.has("unresolved") ? "?unresolved=1" : "";
-  const { comments } = await api<{ comments: ReviewComment[] }>(lock, `/api/comments${unresolved}`);
+  // Drafts are the reviewer's private workspace — always excluded here.
+  const params = new URLSearchParams({ exclude_drafts: "1" });
+  if (args.flags.has("unresolved")) params.set("unresolved", "1");
+  const stateFlag = args.flags.get("state");
+  if (typeof stateFlag === "string") {
+    if (!COMMENT_STATES.has(stateFlag)) {
+      throw new CliError(
+        `invalid --state: ${stateFlag} (submitted | addressed | resolved | orphaned)`,
+      );
+    }
+    params.set("state", stateFlag);
+  } else if (stateFlag === true) {
+    throw new CliError("--state requires a value");
+  }
+  const { comments } = await api<{ comments: ReviewComment[] }>(
+    lock,
+    `/api/comments?${params.toString()}`,
+  );
   out(json, { comments }, () =>
     comments.length === 0 ? "no comments" : comments.map(formatComment).join("\n"),
   );
@@ -138,16 +171,16 @@ async function cmdWait(args: ParsedArgs): Promise<number> {
   });
   out(json, result, (r: WaitResult) => {
     switch (r.reason) {
-      case "submitted":
-        return "review submitted";
-      case "new-comments":
-        return `new comments:\n${r.new_comments.map(formatComment).join("\n")}`;
+      case "ready":
+        return "review marked ready — session complete";
+      case "feedback":
+        return `feedback received:\n${r.comments.map(formatComment).join("\n")}`;
       case "timeout":
         return "timeout (safe to call wait again)";
     }
   });
-  // Distinct exit codes: submitted=0, new-comments=2, timeout=3.
-  return result.reason === "submitted" ? 0 : result.reason === "new-comments" ? 2 : 3;
+  // Distinct exit codes: ready=0, feedback=2, timeout=3.
+  return result.reason === "ready" ? 0 : result.reason === "feedback" ? 2 : 3;
 }
 
 async function cmdResolve(args: ParsedArgs): Promise<number> {
@@ -169,13 +202,13 @@ async function cmdRefresh(args: ParsedArgs): Promise<number> {
   const lock = await requireDaemon(await requireRepoRoot());
   const result = await api<{
     changed: boolean;
-    generation: number;
+    revision: number;
     files: number;
     additions: number;
     deletions: number;
   }>(lock, "/api/refresh", { method: "POST", timeoutMs: 60_000 });
   out(json, result, (r: typeof result) =>
-    `generation ${r.generation}${r.changed ? " (diff changed)" : " (no change)"}: ` +
+    `revision ${r.revision}${r.changed ? " (diff changed)" : " (no change)"}: ` +
     `${r.files} file(s), +${r.additions} -${r.deletions}`,
   );
   return 0;
@@ -209,12 +242,13 @@ function cmdHelp(): number {
       "commands:",
       "  open [range]              start/reuse daemon, open a review session",
       "                            range: working (default) | staged | HEAD | A..B | <commit-ish>",
-      "                            flags: --json --ttl <s> --no-browser",
-      "  status                    session snapshot",
-      "  comments [--unresolved]   list comments",
-      "  wait --timeout <s>        long-poll; exits 0=submitted 2=new-comments 3=timeout",
-      "  resolve <id> [--reply t]  mark a comment addressed",
-      "  refresh                   recompute the diff (bumps generation)",
+      "                            flags: --json --ttl <s> --scope <task> --no-browser",
+      "  status                    session snapshot: state, revision, comment counts",
+      "  comments [--state <s>]    list comments (drafts always excluded)",
+      "           [--unresolved]   s: submitted | addressed | resolved | orphaned",
+      "  wait --timeout <s>        long-poll; exits 0=ready 2=feedback 3=timeout",
+      "  resolve <id> [--reply t]  mark a comment resolved (with an optional reply)",
+      "  refresh                   recompute the diff (bumps the revision)",
       "  stop                      stop the daemon for this repo",
     ].join("\n"),
   );
