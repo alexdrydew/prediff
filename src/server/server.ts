@@ -6,6 +6,7 @@
 import path from "node:path";
 import type {
   DiffManifest,
+  FileDiff,
   ManifestFile,
   OpenResult,
   Session,
@@ -47,6 +48,8 @@ export interface DaemonOptions {
 const PUBLIC_DIR = path.join(import.meta.dir, "..", "..", "public");
 const UI_PATH = path.join(PUBLIC_DIR, "index.html");
 const TTL_CHECK_MS = 60_000;
+/** Max entries in the per-generation file-diff LRU cache. */
+const FILE_DIFF_CACHE_MAX = 256;
 
 interface JsonBody {
   [key: string]: unknown;
@@ -63,6 +66,21 @@ export class Daemon {
   private lastActivity = Date.now();
   private ttlTimer: ReturnType<typeof setInterval> | null = null;
   private refreshing: Promise<boolean> | null = null;
+  /** Repo change-signature the current manifest was computed at (see openSession). */
+  private manifestSignature: string | null = null;
+  /**
+   * Per-generation LRU cache for /api/diff/file responses, keyed by
+   * path + force flag. Cleared whenever the manifest is recomputed with a
+   * different result (generation bump) or the session/range changes, so an
+   * entry is implicitly keyed by (generation, path).
+   */
+  private readonly fileDiffCache = new Map<string, FileDiff>();
+  /** Diagnostic counters (exposed on /api/health, used by tests). */
+  private readonly stats = {
+    manifest_computes: 0,
+    file_diff_computes: 0,
+    file_diff_cache_hits: 0,
+  };
 
   constructor(private readonly opts: DaemonOptions) {
     this.store = new SessionStore(opts.stateDir);
@@ -129,6 +147,9 @@ export class Daemon {
 
   /** Create or reuse the current session for `rangeSpec`, then refresh. */
   private async openSession(rangeSpec: string): Promise<void> {
+    // Capture the change signature BEFORE computing the manifest: anything
+    // that changes afterwards is guaranteed to produce a mismatch later.
+    const signature = await this.watcher.computeSignature();
     this.range = await resolveRange(this.opts.repoRoot, rangeSpec);
     const existing = await this.store.loadCurrent();
     if (existing && existing.range === rangeSpec) {
@@ -137,7 +158,10 @@ export class Daemon {
       this.session = await this.store.create(this.opts.repoRoot, rangeSpec);
       this.hub.broadcast("session.changed", { session_id: this.session.session_id });
     }
+    this.stats.manifest_computes++;
     this.manifest = await computeManifest(this.opts.repoRoot, this.range, this.session.generation);
+    this.manifestSignature = signature;
+    this.fileDiffCache.clear();
   }
 
   /** Recompute the diff; bump generation + re-anchor comments if it changed. */
@@ -151,14 +175,18 @@ export class Daemon {
   }
 
   private async doRefresh(): Promise<boolean> {
+    const signature = await this.watcher.computeSignature();
     this.range = await resolveRange(this.opts.repoRoot, this.session.range);
+    this.stats.manifest_computes++;
     const next = await computeManifest(this.opts.repoRoot, this.range, this.session.generation);
+    this.manifestSignature = signature;
     if (filesSignature(next.files) === filesSignature(this.manifest.files)) {
       return false;
     }
     this.session.generation += 1;
     next.generation = this.session.generation;
     this.manifest = next;
+    this.fileDiffCache.clear();
     await this.reanchorComments();
     await this.store.save(this.session);
     this.hub.broadcast("generation", {
@@ -213,7 +241,9 @@ export class Daemon {
     const { pathname } = url;
     const method = req.method;
 
-    if (pathname === "/api/health") return json({ ok: true, pid: process.pid });
+    if (pathname === "/api/health") {
+      return json({ ok: true, pid: process.pid, stats: this.stats });
+    }
 
     if (pathname === "/" || pathname === "/index.html") {
       return new Response(Bun.file(UI_PATH), {
@@ -243,7 +273,12 @@ export class Daemon {
       if (range !== this.session.range) {
         await this.openSession(range);
       } else {
-        await this.refresh();
+        // Warm open: skip the manifest recompute entirely when the repo's
+        // change signature still matches the one the manifest was built at.
+        const signature = await this.watcher.computeSignature();
+        if (this.manifestSignature === null || signature !== this.manifestSignature) {
+          await this.refresh();
+        }
         if (this.session.review_state === "submitted") {
           // Re-opening a submitted session starts a new review round.
           this.session.review_state = "reviewing";
@@ -274,7 +309,7 @@ export class Daemon {
       const file = this.manifest.files.find((f) => f.path === filePath);
       if (!file) return json({ error: `not in diff: ${filePath}` }, 404);
       const force = url.searchParams.get("force") === "1";
-      return json(await computeFileDiff(this.opts.repoRoot, this.range, file, { force }));
+      return json(await this.fileDiff(file, force));
     }
 
     if (pathname === "/api/comments" && method === "GET") {
@@ -333,6 +368,31 @@ export class Daemon {
     }
 
     return json({ error: "not found" }, 404);
+  }
+
+  /**
+   * Per-file hunks with an in-memory LRU cache for the current generation
+   * (the cache is cleared on every generation bump / session change), so
+   * collapsing and re-expanding a file doesn't re-pay the git subprocess.
+   */
+  private async fileDiff(file: ManifestFile, force: boolean): Promise<FileDiff> {
+    const key = `${force ? "force" : ""}\0${file.path}`;
+    const cached = this.fileDiffCache.get(key);
+    if (cached) {
+      this.stats.file_diff_cache_hits++;
+      // Re-insert to mark as most recently used.
+      this.fileDiffCache.delete(key);
+      this.fileDiffCache.set(key, cached);
+      return cached;
+    }
+    this.stats.file_diff_computes++;
+    const result = await computeFileDiff(this.opts.repoRoot, this.range, file, { force });
+    this.fileDiffCache.set(key, result);
+    if (this.fileDiffCache.size > FILE_DIFF_CACHE_MAX) {
+      const oldest = this.fileDiffCache.keys().next().value;
+      if (oldest !== undefined) this.fileDiffCache.delete(oldest);
+    }
+    return result;
   }
 
   private status(): StatusResult {
