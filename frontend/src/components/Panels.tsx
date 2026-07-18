@@ -17,7 +17,7 @@ import {
   sendFeedback,
   useStore,
 } from "../state/store";
-import { selectUnresolvedCount } from "../state/selectors";
+import { selectDraftCount, selectDrafts, selectOrphans, selectUnresolvedCount } from "../state/selectors";
 import { scrollToPath } from "../state/controller";
 import { timeAgo } from "../lib/timeago";
 import { TagBadge } from "./rows/ThreadRow";
@@ -33,7 +33,7 @@ function commentLoc(c: ReviewComment): string {
 // ---------------------------------------------------------------------------
 
 function SendFeedbackPanel(): ReactElement {
-  const drafts = useStore((s) => s.comments.filter((c) => c.state === "draft"));
+  const drafts = useStore(selectDrafts);
   const revision = useStore((s) => s.session?.revision ?? 1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -94,7 +94,7 @@ function SendFeedbackPanel(): ReactElement {
 
 function MarkReadyPanel(): ReactElement {
   const unresolved = useStore(selectUnresolvedCount);
-  const drafts = useStore((s) => s.comments.filter((c) => c.state === "draft").length);
+  const drafts = useStore(selectDraftCount);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -154,7 +154,7 @@ function MarkReadyPanel(): ReactElement {
 // ---------------------------------------------------------------------------
 
 function AttentionPanel(): ReactElement {
-  const orphans = useStore((s) => s.comments.filter((c) => c.state === "orphaned"));
+  const orphans = useStore(selectOrphans);
   return (
     <div className="panel" role="dialog" aria-label="Needs your attention">
       <h2>Needs your attention</h2>

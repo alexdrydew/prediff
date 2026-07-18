@@ -23,6 +23,10 @@ function memoOne<I extends readonly unknown[], O>(fn: (...args: I) => O): (...ar
   };
 }
 
+/** Stable fallbacks — fresh literals would defeat memoization and make
+ * getSnapshot return a new object every call (infinite render loop). */
+const EMPTY_FILES: readonly ManifestFile[] = [];
+
 const expandedSet = memoOne(
   (
     files: readonly ManifestFile[],
@@ -38,7 +42,7 @@ const expandedSet = memoOne(
 
 /** Effective per-file expansion (defaults + overrides), memoized. */
 export function selectExpanded(state: AppState): ReadonlySet<string> {
-  return expandedSet(state.manifest?.files ?? [], state.collapsedOverride, state.autoCollapsed);
+  return expandedSet(state.manifest?.files ?? EMPTY_FILES, state.collapsedOverride, state.autoCollapsed);
 }
 
 const rowsMemo = memoOne((input: RowsInput): Row[] => buildRows(input));
@@ -87,6 +91,24 @@ const EMPTY_ROWS: Row[] = [];
 
 // ---------------------------------------------------------------------------
 // Counts
+
+const draftsMemo = memoOne((comments: AppState["comments"]) =>
+  comments.filter((c) => c.state === "draft"),
+);
+
+/** Draft comments (memoized — safe to use directly as a snapshot). */
+export function selectDrafts(state: AppState): AppState["comments"] {
+  return draftsMemo(state.comments);
+}
+
+const orphansMemo = memoOne((comments: AppState["comments"]) =>
+  comments.filter((c) => c.state === "orphaned"),
+);
+
+/** Orphaned comments (memoized — safe to use directly as a snapshot). */
+export function selectOrphans(state: AppState): AppState["comments"] {
+  return orphansMemo(state.comments);
+}
 
 export function selectDraftCount(state: AppState): number {
   return state.comments.filter((c) => c.state === "draft").length;
@@ -189,7 +211,7 @@ const treeMemo = memoOne(
 
 export function selectTree(state: AppState): TreeModel {
   return treeMemo(
-    state.manifest?.files ?? [],
+    state.manifest?.files ?? EMPTY_FILES,
     state.viewedFiles,
     selectExpanded(state),
     state.comments,

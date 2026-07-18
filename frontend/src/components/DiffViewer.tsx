@@ -10,13 +10,7 @@ import type { ReactElement } from "react";
 import { memo, useCallback, useEffect, useRef } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { selectRows } from "../state/selectors";
-import {
-  cancelSelection,
-  commitSelection,
-  setActiveContext,
-  store,
-  useStore,
-} from "../state/store";
+import { setActiveContext, store, useStore } from "../state/store";
 import { registerDiffController } from "../state/controller";
 import { estimateRowHeight, isDynamicRow, type Row } from "../lib/rows";
 import { languageForPath } from "../lib/language";
@@ -63,7 +57,6 @@ export function DiffViewer(): ReactElement {
   const rows = useStore(selectRows);
   const viewMode = useStore((s) => s.viewMode);
   const canvasChars = useStore(selectCanvasChars);
-  const hasSelection = useStore((s) => s.selection !== null);
   const parentRef = useRef<HTMLDivElement>(null);
   const topIndexRef = useRef(0);
   const rowsRef = useRef(rows);
@@ -82,13 +75,16 @@ export function DiffViewer(): ReactElement {
   const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element>>(virtualizer);
   virtualizerRef.current = virtualizer;
 
-  useEffect(() => {
-    registerDiffController({
-      scrollToIndex: (index, align = "start") =>
-        virtualizerRef.current.scrollToIndex(index, { align }),
-      getTopIndex: () => topIndexRef.current,
-    });
-    return () => registerDiffController(null);
+  /** Row index at the top of the viewport, computed synchronously from the
+   * scroll offset (never from a cached value — scroll events and rAF can lag
+   * behind programmatic scrolling). */
+  const computeTopIndex = useCallback((): number => {
+    const el = parentRef.current;
+    if (!el) return 0;
+    const top = el.scrollTop + 2;
+    const items = virtualizerRef.current.getVirtualItems();
+    const current = items.find((it) => it.end > top) ?? items[items.length - 1];
+    return current ? current.index : 0;
   }, []);
 
   // Viewport tracking: which row is at the top → sticky header + tree sync.
@@ -119,6 +115,19 @@ export function DiffViewer(): ReactElement {
   }, []);
 
   useEffect(() => {
+    registerDiffController({
+      scrollToIndex: (index, align = "start") => {
+        virtualizerRef.current.scrollToIndex(index, { align });
+        // Scroll events / rAF can be throttled (background tabs); make sure
+        // the sticky header and top-index tracking still catch up.
+        setTimeout(updateContext, 50);
+      },
+      getTopIndex: computeTopIndex,
+    });
+    return () => registerDiffController(null);
+  }, [computeTopIndex, updateContext]);
+
+  useEffect(() => {
     const el = parentRef.current;
     if (!el) return;
     let raf = 0;
@@ -142,20 +151,8 @@ export function DiffViewer(): ReactElement {
     updateContext();
   }, [rows, updateContext]);
 
-  // Drag-to-select a line range: commit on mouseup anywhere, cancel on Escape.
-  useEffect(() => {
-    if (!hasSelection) return;
-    const onMouseUp = (): void => commitSelection();
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") cancelSelection();
-    };
-    window.addEventListener("mouseup", onMouseUp);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("mouseup", onMouseUp);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [hasSelection]);
+  // Selection commit lives in beginSelection (store); Escape-cancel lives in
+  // the global keyboard model. Nothing to wire up here.
 
   // Unified mode canvas grows with the longest loaded line so long code is
   // reachable by horizontal scroll; split mode ellipsizes within panes.

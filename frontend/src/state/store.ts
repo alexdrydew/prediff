@@ -735,6 +735,13 @@ export async function expandContext(
 
 export function beginSelection(file: string, side: Side, line: number): void {
   setState({ selection: { file, side, anchor: line, head: line } });
+  // Attach the commit listener immediately (not in a React effect) so a
+  // fast click — mousedown+mouseup in the same tick — still commits.
+  const onUp = (): void => {
+    window.removeEventListener("mouseup", onUp);
+    commitSelection();
+  };
+  window.addEventListener("mouseup", onUp);
 }
 
 export function extendSelection(file: string, side: Side, line: number): void {
