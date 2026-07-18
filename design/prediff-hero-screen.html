@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>prediff — fix-auth-hashing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ══════════════════════ TOKENS ══════════════════════ */
+:root{
+  --font-ui:-apple-system,"Segoe UI",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono","SF Mono",ui-monospace,Consolas,monospace;
+  --radius:6px;--radius-sm:4px;
+  --topbar-h:48px;--sidebar-w:272px;--ctx-h:34px;
+  --t:.16s ease;
+}
+:root[data-theme="light"]{
+  --bg:#ffffff;--bg1:#f6f7f9;--bg2:#ffffff;--bg3:#eef0f3;
+  --bd:#dfe2e8;--bds:#eceef2;
+  --tx:#111419;--tx2:#585f6e;--tx3:#8a919f;
+  --ac:#2563eb;--ach:#1d4ed8;--acs:#eaf0fe;
+  --ag:#6366f1;--ags:#eef0fd;--ag-bd:rgba(99,102,241,.22);
+  --add-bg:#e2f5e8;--add-w:#abf2bc;--add-tx:#1a7f37;--add-g:#d1f0da;
+  --del-bg:#fceaea;--del-w:#ffcecb;--del-tx:#cf222e;--del-g:#f8dcda;
+  --ctx-tx:#585f6e;--gut-tx:#a0a7b4;--gut-bg:#f6f7f9;
+  --hunk-bg:#eaf0fe;--hunk-tx:#2563eb;
+  --warn:#b45309;--warn-bg:#fdf2cd;
+  --err:#cf222e;--err-bg:#fee2e2;
+  --ok:#1a7f37;--ok-bg:#ddf4e4;
+  --shadow:0 8px 32px rgba(15,20,30,.14);
+  --focus-ring:rgba(37,99,235,.7);
+}
+:root[data-theme="dark"]{
+  --bg:#0b0c0e;--bg1:#111318;--bg2:#161820;--bg3:#1d2028;
+  --bd:#282c36;--bds:#1e2129;
+  --tx:#e4e6ea;--tx2:#969dac;--tx3:#5f6775;
+  --ac:#3b82f6;--ach:#60a5fa;--acs:#172240;
+  --ag:#818cf8;--ags:#1c1e3c;--ag-bd:rgba(129,140,248,.25);
+  --add-bg:rgba(46,160,67,.12);--add-w:rgba(46,160,67,.34);--add-tx:#56d364;--add-g:rgba(46,160,67,.2);
+  --del-bg:rgba(248,81,73,.12);--del-w:rgba(248,81,73,.34);--del-tx:#f85149;--del-g:rgba(248,81,73,.2);
+  --ctx-tx:#8b92a0;--gut-tx:#464e5e;--gut-bg:#111318;
+  --hunk-bg:#172240;--hunk-tx:#5b9cf6;
+  --warn:#e5a817;--warn-bg:rgba(229,168,23,.12);
+  --err:#f85149;--err-bg:rgba(248,81,73,.12);
+  --ok:#56d364;--ok-bg:rgba(86,211,100,.12);
+  --shadow:0 8px 32px rgba(0,0,0,.5);
+  --focus-ring:rgba(96,165,250,.75);
+}
+
+/* ══════════════════════ BASE ══════════════════════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--font-ui);font-size:14px;color:var(--tx);background:var(--bg);-webkit-font-smoothing:antialiased;transition:background var(--t)}
+::-webkit-scrollbar{width:7px;height:7px}
+::-webkit-scrollbar-thumb{background:var(--tx3);border-radius:10px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-track{background:transparent}
+button{cursor:pointer;font-family:inherit;color:inherit}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+
+.shell{display:flex;flex-direction:column;height:100vh}
+
+/* ══════════════════════ TOPBAR ══════════════════════ */
+.topbar{height:var(--topbar-h);min-height:var(--topbar-h);display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--bg2);border-bottom:1px solid var(--bd);z-index:60}
+.tb-logo{display:flex;align-items:center;gap:7px;font-weight:600;font-size:15px;letter-spacing:-.02em;user-select:none}
+.tb-logo svg{opacity:.9}
+.tb-sep{width:1px;height:20px;background:var(--bd)}
+.tb-session{font-family:var(--font-mono);font-size:13px;font-weight:500;color:var(--tx);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.01em}
+
+/* Signature element: revision spine — a small horizontal timeline of revisions,
+   unique to prediff since it's the only tool with an explicit multi-revision agent loop */
+.spine{display:inline-flex;align-items:center;gap:0;padding:3px 8px;border-radius:12px;background:var(--bg1);border:1px solid var(--bd);height:22px}
+.spine-node{width:8px;height:8px;border-radius:50%;background:var(--bg3);border:1.5px solid var(--tx3);flex-shrink:0;transition:all var(--t);cursor:pointer;position:relative}
+.spine-node.done{background:var(--tx3);border-color:var(--tx3)}
+.spine-node.done.has-comment{background:var(--ac);border-color:var(--ac)}
+.spine-node.current{background:var(--ag);border-color:var(--ag);box-shadow:0 0 0 3px var(--ags)}
+.spine-node.next{background:transparent;border-style:dashed;border-color:var(--tx3)}
+.spine-line{width:14px;height:1.5px;background:var(--tx3);opacity:.4;flex-shrink:0}
+.spine-line.dashed{background:none;border-top:1.5px dashed var(--tx3);opacity:.5}
+.spine-label{font-size:10px;font-weight:600;color:var(--tx2);margin-left:4px;letter-spacing:.02em;text-transform:uppercase}
+.tb-sync{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:500;white-space:nowrap;transition:color var(--t)}
+.tb-sync .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.tb-sync.s-synced{color:var(--ok)}
+.tb-sync.s-saving{color:var(--tx2)}
+.tb-sync.s-agent{color:var(--ag)}.tb-sync.s-agent .dot{animation:pulse 1.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.tb-rev{font-size:11px;font-weight:600;padding:2px 8px;border-radius:var(--radius-sm);color:var(--ag);background:var(--ags);border:1px solid var(--ag-bd);white-space:nowrap;transition:all var(--t)}
+.fill{flex:1}
+.tb-toggle{display:flex;border:1px solid var(--bd);border-radius:var(--radius);overflow:hidden}
+.tb-toggle button{font-size:12px;font-weight:500;padding:4px 11px;border:none;background:transparent;color:var(--tx3);transition:all var(--t)}
+.tb-toggle button.on{background:var(--bg3);color:var(--tx)}
+.tb-progress{font-size:11px;color:var(--tx3);white-space:nowrap;display:flex;align-items:center;gap:8px}
+.tb-progress .sep{width:1px;height:12px;background:var(--bd)}
+.tb-progress .unresolved{color:var(--warn);font-weight:500}
+.tb-progress .resolved{color:var(--ok)}
+.icon-btn{width:30px;height:30px;display:flex;align-items:center;justify-content:center;border:1px solid var(--bd);border-radius:var(--radius);background:transparent;color:var(--tx3);transition:all var(--t)}
+.icon-btn:hover{color:var(--tx);background:var(--bg3)}
+.btn{font-size:13px;font-weight:500;padding:6px 14px;border-radius:var(--radius);white-space:nowrap;border:none;transition:all var(--t)}
+.btn-p{background:var(--ac);color:#fff}
+.btn-p:hover{background:var(--ach)}
+.btn-p:disabled{opacity:.45;cursor:not-allowed}
+.btn-s{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+.btn-s:hover{background:var(--bg3)}
+.btn:focus-visible,.icon-btn:focus-visible{outline:2px solid var(--focus-ring);outline-offset:1px}
+
+/* ══════════════════════ BODY ══════════════════════ */
+.body{display:flex;flex:1;overflow:hidden}
+
+/* ── sidebar ── */
+.sidebar{width:var(--sidebar-w);min-width:var(--sidebar-w);background:var(--bg1);border-right:1px solid var(--bd);display:flex;flex-direction:column}
+.sb-search{padding:10px 12px;border-bottom:1px solid var(--bds)}
+.sb-wrap{position:relative}
+.sb-wrap svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);color:var(--tx3);pointer-events:none}
+.sb-wrap input{width:100%;font-size:13px;font-family:var(--font-ui);padding:6px 30px 6px 30px;border:1px solid var(--bd);border-radius:var(--radius-sm);background:var(--bg2);color:var(--tx);outline:none;transition:border-color var(--t)}
+.sb-wrap input::placeholder{color:var(--tx3)}
+.sb-wrap input:focus{border-color:var(--ac)}
+.sb-key{position:absolute;right:8px;top:50%;transform:translateY(-50%);font-family:var(--font-mono);font-size:10px;padding:1px 5px;border:1px solid var(--bd);border-radius:3px;color:var(--tx3);background:var(--bg1)}
+.sb-list{flex:1;overflow-y:auto;padding:4px 0}
+.sb-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--tx3);padding:14px 14px 6px}
+.sb-item{display:flex;align-items:center;gap:7px;padding:5px 14px;cursor:pointer;transition:background .1s;font-size:13px;border:none;background:none;width:100%;text-align:left}
+.sb-item:hover{background:var(--bg3)}
+.sb-item.active{background:var(--acs);box-shadow:inset 2px 0 0 var(--ac)}
+.sb-item.dim{opacity:.45}
+.sb-ic{font-family:var(--font-mono);font-size:10px;font-weight:700;width:14px;text-align:center}
+.sb-ic.m{color:var(--warn)}.sb-ic.a{color:var(--add-tx)}.sb-ic.d{color:var(--del-tx)}
+.sb-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--tx)}
+.sb-item.dim .sb-name{color:var(--tx3)}
+.sb-stats{font-family:var(--font-mono);font-size:10px;color:var(--tx3);display:flex;gap:3px}
+.sb-stats .a{color:var(--add-tx)}.sb-stats .d{color:var(--del-tx)}
+.sb-cmnt{font-size:10px;font-weight:600;padding:0 5px;border-radius:8px;background:var(--acs);color:var(--ac);line-height:1.6}
+.sb-dot{width:6px;height:6px;border-radius:50%;background:var(--ag)}
+.chk{width:13px;height:13px;border:1.5px solid var(--bd);border-radius:3px;position:relative;flex-shrink:0;transition:all var(--t)}
+.chk.on{background:var(--ac);border-color:var(--ac)}
+.chk.on::after{content:'';position:absolute;left:2.5px;top:1px;width:5px;height:3px;border-left:1.5px solid #fff;border-bottom:1.5px solid #fff;transform:rotate(-45deg)}
+
+/* ── main ── */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg)}
+
+.rev-banner{display:none;align-items:center;gap:10px;padding:9px 20px;background:var(--ags);border-bottom:1px solid var(--ag-bd);font-size:13px;animation:slideDown .25s ease}
+.rev-banner.show{display:flex}
+@keyframes slideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.rev-banner b{color:var(--ag);font-weight:600}
+.rev-btn{font-size:11px;font-weight:600;padding:4px 11px;border-radius:var(--radius-sm);border:none}
+.rev-go{background:var(--ag);color:#fff}
+.rev-stay{background:transparent;border:1px solid var(--bd);color:var(--tx2)}
+
+.ctx{display:flex;align-items:center;gap:8px;height:var(--ctx-h);min-height:var(--ctx-h);padding:0 20px;background:var(--bg1);border-bottom:1px solid var(--bd);z-index:5}
+.ctx-path{font-family:var(--font-mono);font-size:13px;font-weight:500}
+.ctx-hunk{font-size:11px;color:var(--tx3)}
+.ctx-btn{font-size:11px;color:var(--tx3);background:transparent;border:1px solid var(--bd);border-radius:var(--radius-sm);padding:2px 8px;transition:all var(--t)}
+.ctx-btn:hover{color:var(--tx);background:var(--bg3)}
+
+.diff-scroll{flex:1;overflow:auto;scroll-behavior:smooth}
+
+/* diff table */
+.dt{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:13px;line-height:20px}
+.dt td{padding:0;vertical-align:top;white-space:pre;border:none}
+.g{width:46px;min-width:46px;text-align:right;padding-right:8px!important;color:var(--gut-tx);background:var(--gut-bg);font-size:12px;user-select:none;position:relative;border-right:1px solid var(--bds)}
+.g:first-child{border-right:none}
+.g .plus{position:absolute;left:3px;top:50%;transform:translateY(-50%);width:16px;height:16px;border-radius:3px;background:var(--ac);color:#fff;font-size:13px;font-weight:600;display:none;align-items:center;justify-content:center;border:none;line-height:1;z-index:2;box-shadow:0 1px 3px rgba(0,0,0,.15)}
+tr:hover .g .plus{display:flex}
+/* Show plus buttons within focused hunk so the affordance is visible in screenshots */
+.hunk-focus-block .g .plus{display:flex;opacity:.5}
+.hunk-focus-block .g .plus:hover,tr:hover .g .plus{opacity:1}
+.s{width:20px;min-width:20px;text-align:center;user-select:none;font-weight:500}
+.cc{padding:0 12px!important;width:50%}
+.dt.unified .cc{width:auto}
+tr.la,td.la{background:var(--add-bg)}
+tr.la .s,td.la .s-in{color:var(--add-tx)}
+tr.la .g,td.g.ga{background:var(--add-g)}
+tr.ld,td.ld{background:var(--del-bg)}
+tr.ld .s,td.ld .s-in{color:var(--del-tx)}
+tr.ld .g,td.g.gd{background:var(--del-g)}
+tr.lc .cc,td.lc{color:var(--ctx-tx)}
+tr.lh{background:var(--hunk-bg)}
+tr.lh td{color:var(--hunk-tx);font-size:12px;padding:6px 12px!important;font-weight:500}
+.wa{background:var(--add-w);border-radius:2px;padding:0 1px}
+.wd{background:var(--del-w);border-radius:2px;padding:0 1px}
+.hunk-focus{outline:2px solid var(--focus-ring);outline-offset:-2px}
+td.empty{background:repeating-linear-gradient(135deg,transparent,transparent 6px,var(--bds) 6px,var(--bds) 7px);opacity:.4}
+td.g.empty{background:transparent;color:transparent}
+
+/* comments */
+.cmt-row td{padding:0!important;white-space:normal!important}
+.cmt-wrap{background:var(--bg2);border-top:1px solid var(--bd);border-bottom:1px solid var(--bd)}
+.cmt{padding:12px 20px;border-bottom:1px solid var(--bds)}
+.cmt:last-child{border-bottom:none}
+.cmt-head{display:flex;align-items:center;gap:7px;margin-bottom:4px;flex-wrap:wrap}
+.av{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0}
+.av-u{background:var(--acs);color:var(--ac);border:1px solid rgba(59,130,246,.3)}
+.av-a{background:var(--ags);color:var(--ag);border:1px solid var(--ag-bd)}
+.cmt-name{font-size:13px;font-weight:600}
+.cmt-time{font-size:11px;color:var(--tx3)}
+.tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:1px 6px;border-radius:3px;transition:all var(--t)}
+.tag-mf{color:var(--err);background:var(--err-bg);border:1px solid rgba(207,34,46,.2)}
+.tag-addr{color:var(--ag);background:var(--ags);border:1px solid var(--ag-bd)}
+/* Lifecycle indicator: dot + word, no boxed badge — reduces visual noise */
+.life{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--tx3);font-weight:500}
+.life .d{width:6px;height:6px;border-radius:50%;background:currentColor}
+.life.draft{color:var(--tx3)}
+.life.draft .d{background:transparent;border:1.5px dashed var(--tx3)}
+.life.submitted{color:var(--tx2)}
+.life.addressed{color:var(--ag)}
+.life.resolved{color:var(--ok)}
+.cmt-body{font-family:var(--font-ui);font-size:13px;line-height:1.55;padding-left:29px}
+.cmt-body code{font-family:var(--font-mono);font-size:11px;padding:1px 5px;background:var(--bg1);border:1px solid var(--bds);border-radius:3px}
+.cmt.agent-r{border-left:2px solid var(--ag);margin-left:20px;padding-left:18px}
+.cmt-actions{padding-left:29px;margin-top:6px;display:flex;gap:10px}
+.cmt-link{font-size:11px;color:var(--ac);background:none;border:none;padding:0}
+.cmt-link:hover{text-decoration:underline}
+
+/* composer */
+.composer{padding:12px 20px;background:var(--bg2)}
+.composer textarea{width:100%;font-family:var(--font-ui);font-size:13px;padding:8px 10px;line-height:1.55;border:1px solid var(--bd);border-radius:var(--radius-sm);background:var(--bg);color:var(--tx);resize:vertical;min-height:64px;outline:none;transition:border-color var(--t)}
+.composer textarea:focus{border-color:var(--ac)}
+.composer-ft{display:flex;align-items:center;justify-content:space-between;margin-top:8px;gap:8px;flex-wrap:wrap}
+.composer-hint{font-size:11px;color:var(--tx3)}
+kbd{font-family:var(--font-mono);font-size:10px;padding:1px 5px;min-width:16px;display:inline-block;text-align:center;border:1px solid var(--bd);border-radius:3px;background:var(--bg1);color:var(--tx2);line-height:1.5}
+.composer-actions{display:flex;align-items:center;gap:8px}
+.sev-picker{display:flex;gap:4px}
+.sev{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;padding:2px 7px;border-radius:3px;background:transparent;border:1px solid var(--bd);color:var(--tx3);transition:all var(--t)}
+.sev.on{border-color:var(--err);color:var(--err);background:var(--err-bg)}
+.sev.on2{border-color:var(--ac);color:var(--ac);background:var(--acs)}
+
+/* keyboard bar */
+.kbar{display:flex;align-items:center;gap:16px;padding:4px 16px;background:var(--bg1);border-top:1px solid var(--bd)}
+.kh{display:flex;align-items:center;gap:3px;font-size:11px;color:var(--tx3)}
+.kbar-x{font-size:11px;color:var(--tx3);background:none;border:none}
+.kbar-x:hover{color:var(--tx2)}
+
+/* modal (shortcuts + send feedback) */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:200}
+.overlay.show{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;box-shadow:var(--shadow);width:min(460px,90vw);padding:22px;animation:modalIn .18s ease}
+@keyframes modalIn{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:scale(1)}}
+.modal h3{font-size:16px;font-weight:600;margin-bottom:4px}
+.modal .sub{font-size:13px;color:var(--tx2);margin-bottom:14px}
+.mrow{display:flex;align-items:center;gap:10px;padding:7px 10px;border-bottom:1px solid var(--bds);font-size:12px}
+.mrow:last-child{border-bottom:none}
+.mbox{border:1px solid var(--bd);border-radius:var(--radius);margin-bottom:16px}
+.mfoot{display:flex;justify-content:flex-end;gap:8px}
+.krow{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:13px;color:var(--tx2)}
+.krow .keys{display:flex;gap:4px}
+
+/* toast */
+.toast{position:fixed;bottom:44px;left:50%;transform:translateX(-50%) translateY(8px);background:var(--bg2);border:1px solid var(--bd);border-radius:var(--radius);padding:8px 16px;font-size:13px;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:all .25s ease;z-index:300;display:flex;align-items:center;gap:8px}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast .dot{width:6px;height:6px;border-radius:50%;background:var(--ok)}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="tb-logo">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="2" width="14" height="14" rx="3.5" stroke="currentColor" stroke-width="1.4"/><rect x="6" y="5.5" width="2" height="7" rx=".5" fill="currentColor" opacity=".65"/><rect x="10" y="7.5" width="2" height="5" rx=".5" fill="currentColor" opacity=".65"/></svg>
+      prediff
+    </div>
+    <div class="tb-sep"></div>
+    <span class="tb-session">fix-auth-hashing</span>
+    <!-- Signature element: revision spine — visual timeline of the agent loop -->
+    <div class="spine" id="spine" title="Session revisions">
+      <span class="spine-node done has-comment" title="Rev 1 — initial change"></span>
+      <span class="spine-line"></span>
+      <span class="spine-node current" title="Rev 2 — you're here"></span>
+      <span class="spine-line dashed"></span>
+      <span class="spine-node next" title="Rev 3 — pushed by agent, not yet viewed"></span>
+      <span class="spine-label" id="spineLabel">Rev 2 / 3</span>
+    </div>
+    <div class="tb-sync s-synced" id="sync"><span class="dot"></span><span id="syncTx">Synced</span></div>
+    <div class="fill"></div>
+    <div class="tb-toggle">
+      <button class="on" id="btnSide" onclick="setView('side')">Side-by-side</button>
+      <button id="btnUni" onclick="setView('unified')">Unified</button>
+    </div>
+    <span class="tb-progress" id="progress">
+      <span id="progViewed">1 / 3 viewed</span>
+      <span class="sep"></span>
+      <span class="unresolved" id="progUnresolved">1 unresolved</span>
+    </span>
+    <button class="icon-btn" onclick="toggleTheme()" title="Toggle theme (t)">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" id="themeIcon"><circle cx="8" cy="8" r="3.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>
+    </button>
+    <button class="btn btn-s" onclick="toast('Session marked ready. Push to GitHub when you\'re set.')">Mark Ready</button>
+    <button class="btn btn-p" id="sendBtn" onclick="openSend()">Send Feedback</button>
+  </header>
+
+  <div class="body">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="sb-search">
+        <div class="sb-wrap">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>
+          <input placeholder="Filter files..." id="filterInput" oninput="filterTree(this.value)">
+          <span class="sb-key">/</span>
+        </div>
+      </div>
+      <div class="sb-list">
+        <div class="sb-label">Changed files</div>
+        <div id="treeMain"></div>
+        <div class="sb-label" style="margin-top:6px">Auto-collapsed</div>
+        <div id="treeCollapsed"></div>
+      </div>
+    </aside>
+
+    <!-- MAIN -->
+    <main class="main">
+      <div class="rev-banner show" id="revBanner">
+        <b>Agent pushed Revision 3</b><span style="color:var(--tx2)"> — responded to your feedback in src/auth.py</span>
+        <div class="fill"></div>
+        <button class="rev-btn rev-go" onclick="applyRevision()">Review now</button>
+        <button class="rev-btn rev-stay" onclick="dismissBanner()">Keep reviewing Rev 2</button>
+      </div>
+
+      <div class="ctx">
+        <span class="ctx-path" id="ctxPath">src/auth.py</span>
+        <span class="ctx-hunk" id="ctxHunk">hunk 1 of 2</span>
+        <div class="fill"></div>
+        <button class="ctx-btn" onclick="toast('Context expanded to 10 lines (mock)')">Expand context</button>
+      </div>
+
+      <div class="diff-scroll" id="diffScroll"></div>
+    </main>
+  </div>
+
+  <!-- KEYBOARD BAR -->
+  <footer class="kbar" id="kbar">
+    <div class="kh"><kbd>j</kbd><kbd>k</kbd> hunks</div>
+    <div class="kh"><kbd>n</kbd><kbd>p</kbd> files</div>
+    <div class="kh"><kbd>c</kbd> comment</div>
+    <div class="kh"><kbd>v</kbd> viewed</div>
+    <div class="kh"><kbd>d</kbd> view</div>
+    <div class="kh"><kbd>t</kbd> theme</div>
+    <div class="fill"></div>
+    <div class="kh"><kbd>?</kbd> all shortcuts</div>
+    <button class="kbar-x" onclick="document.getElementById('kbar').style.display='none'">Dismiss</button>
+  </footer>
+</div>
+
+<!-- SHORTCUTS MODAL -->
+<div class="overlay" id="kbOverlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal">
+    <h3>Keyboard shortcuts</h3>
+    <div class="sub">Single keys. No modes, no chords beyond Ctrl+Enter.</div>
+    <div class="krow"><span>Next / previous hunk</span><span class="keys"><kbd>j</kbd><kbd>k</kbd></span></div>
+    <div class="krow"><span>Next / previous file</span><span class="keys"><kbd>n</kbd><kbd>p</kbd></span></div>
+    <div class="krow"><span>Comment on focused hunk</span><span class="keys"><kbd>c</kbd></span></div>
+    <div class="krow"><span>Submit open composer</span><span class="keys"><kbd>Ctrl</kbd><kbd>Enter</kbd></span></div>
+    <div class="krow"><span>Cancel composer / close panel</span><span class="keys"><kbd>Esc</kbd></span></div>
+    <div class="krow"><span>Toggle viewed on current file</span><span class="keys"><kbd>v</kbd></span></div>
+    <div class="krow"><span>Next / previous unresolved comment</span><span class="keys"><kbd>]</kbd><kbd>[</kbd></span></div>
+    <div class="krow"><span>Focus file filter</span><span class="keys"><kbd>/</kbd></span></div>
+    <div class="krow"><span>Side-by-side / unified</span><span class="keys"><kbd>d</kbd></span></div>
+    <div class="krow"><span>Toggle theme</span><span class="keys"><kbd>t</kbd></span></div>
+    <div class="krow"><span>This overlay</span><span class="keys"><kbd>?</kbd></span></div>
+  </div>
+</div>
+
+<!-- SEND FEEDBACK MODAL -->
+<div class="overlay" id="sendOverlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal">
+    <h3>Send feedback to agent?</h3>
+    <div class="sub" id="sendSub">This submits 1 draft comment and signals the agent to start Revision 3.</div>
+    <div class="mbox" id="sendList"></div>
+    <div class="mfoot">
+      <button class="btn btn-s" onclick="document.getElementById('sendOverlay').classList.remove('show')">Cancel</button>
+      <button class="btn btn-p" onclick="confirmSend()">Send feedback</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"><span class="dot"></span><span id="toastTx"></span></div>
+
+<script>
+/* ═══════════════ STATE ═══════════════ */
+const state = {
+  revision: 2,
+  view: 'side',
+  currentFile: 0,
+  focusHunk: 0,
+  agentRevised: true,    // agent has already pushed Rev 3 — banner visible on load so client sees the loop
+  applied: false,        // reviewer hasn't switched to Rev 3 yet
+  comment: { state:'submitted', tag:'must-fix', body:'The iteration count of <code>100000</code> is too low for 2024. Use at least <code>600000</code> per OWASP guidance, or switch to argon2id.' },
+  totalComments: 3,
+  unresolvedComments: 1,
+  files: [
+    {name:'src/auth.py', icon:'m', add:12, del:2, viewed:false, agent:true, hasComment:true},
+    {name:'src/session.py', icon:'m', add:4, del:1, viewed:true, agent:false},
+    {name:'src/audit_log.py', icon:'a', add:28, del:0, viewed:false, agent:true},
+  ],
+  collapsed: [
+    {name:'tests/__snapshots__/auth.snap', icon:'d', add:0, del:84},
+    {name:'package-lock.json', icon:'m', add:412, del:318},
+  ]
+};
+
+/* ═══════════════ DIFF DATA ═══════════════
+   type: ctx | add | del | pair (del+add aligned) | hunk | comment | composer */
+function authDiff(){
+  const iter = state.applied ? '600000' : '100000';
+  return [
+    {t:'hunk', txt:'@@ -1,10 +1,18 @@'},
+    {t:'add', n:1, code:'<span class="wa">import hashlib</span>'},
+    {t:'add', n:2, code:'<span class="wa">import hmac</span>'},
+    {t:'add', n:3, code:''},
+    {t:'add', n:4, code:'<span class="wa">def hash_password(password, salt):</span>'},
+    {t:'add', n:5, code:'    return hashlib.<span class="wa">pbkdf2_hmac</span>("sha256", password.encode(), salt, <span class="wa">'+iter+'</span>)'},
+    {t:'add', n:6, code:''},
+    {t:'ctx', o:1, n:7, code:'def login(username, password):'},
+    {t:'ctx', o:2, n:8, code:'    user = db.find_user(username)'},
+    {t:'ctx', o:3, n:9, code:'    if user is None:'},
+    {t:'ctx', o:4, n:10, code:'        return None'},
+    {t:'pair', o:5, n:11, del:'    if user.password != <span class="wd">password</span>:', add:'    <span class="wa">hashed = hash_password(password, user.salt)</span>'},
+    {t:'add', n:12, code:'    if not <span class="wa">hmac.compare_digest(hashed, user.password_hash)</span>:'},
+    {t:'comment'},
+    {t:'ctx', o:6, n:13, code:'        return None'},
+    {t:'ctx', o:7, n:14, code:'    return create_session(user)'},
+    {t:'hunk', txt:'@@ -9,3 +15,4 @@'},
+    {t:'ctx', o:9, n:16, code:'def logout(session_id):'},
+    {t:'ctx', o:10, n:17, code:'    db.remove_session(session_id)'},
+    {t:'add', n:18, code:'    <span class="wa">audit_log.record("logout", session_id)</span>'},
+  ];
+}
+function sessionDiff(){ return [
+  {t:'hunk', txt:'@@ -14,6 +14,9 @@'},
+  {t:'ctx', o:14, n:14, code:'def create_session(user):'},
+  {t:'pair', o:15, n:15, del:'    token = <span class="wd">uuid4().hex</span>', add:'    token = <span class="wa">secrets.token_urlsafe(32)</span>'},
+  {t:'add', n:16, code:'    <span class="wa">session.expires = now() + SESSION_TTL</span>'},
+  {t:'ctx', o:16, n:17, code:'    db.save_session(session)'},
+  {t:'ctx', o:17, n:18, code:'    return session'},
+];}
+function auditDiff(){ return [
+  {t:'hunk', txt:'@@ -0,0 +1,8 @@ (new file)'},
+  {t:'add', n:1, code:'<span class="wa">import json, time</span>'},
+  {t:'add', n:2, code:''},
+  {t:'add', n:3, code:'<span class="wa">def record(event, session_id):</span>'},
+  {t:'add', n:4, code:'    <span class="wa">entry = {"event": event, "sid": session_id, "ts": time.time()}</span>'},
+  {t:'add', n:5, code:'    <span class="wa">with open(LOG_PATH, "a") as f:</span>'},
+  {t:'add', n:6, code:'        <span class="wa">f.write(json.dumps(entry) + "\\n")</span>'},
+];}
+const diffs = [authDiff, sessionDiff, auditDiff];
+
+/* ═══════════════ RENDER ═══════════════ */
+function commentBlock(){
+  const c = state.comment;
+  const lifeMap = {draft:'Draft',submitted:'Submitted',addressed:'Addressed',resolved:'Resolved'};
+  let html = `<tr class="cmt-row"><td colspan="${state.view==='side'?5:4}"><div class="cmt-wrap">
+    <div class="cmt">
+      <div class="cmt-head">
+        <div class="av av-u">J</div><span class="cmt-name">You</span>
+        <span class="tag tag-mf">Must fix</span>
+        <span class="cmt-time">2 min ago</span>
+        <span class="fill"></span>
+        <span class="life ${c.state}"><span class="d"></span>${lifeMap[c.state]}</span>
+      </div>
+      <div class="cmt-body">${c.body}</div>`;
+  if(c.state==='draft') html += `<div class="cmt-actions"><button class="cmt-link" onclick="toast('Draft autosaved locally — survives reload.')">Edit</button><button class="cmt-link">Delete</button></div>`;
+  html += `</div>`;
+  if(c.state==='addressed'){
+    html += `<div class="cmt agent-r">
+      <div class="cmt-head"><div class="av av-a">A</div><span class="cmt-name">Agent</span><span class="cmt-time">just now</span><span class="fill"></span><span class="life addressed"><span class="d"></span>Addressed in Rev 3</span></div>
+      <div class="cmt-body">Updated to <code>600000</code> iterations in Revision 3, with a comment citing the OWASP reference. Review the change above and resolve if it looks right.</div>
+      <div class="cmt-actions"><button class="cmt-link" onclick="markResolved()">Mark resolved</button><button class="cmt-link" onclick="toast('Reopened — back to Submitted.')">Reopen</button></div>
+    </div>`;
+  }
+  html += `</div></td></tr>`;
+  return html;
+}
+
+function renderDiff(){
+  const rows = diffs[state.currentFile]();
+  const side = state.view==='side';
+  let html = `<table class="dt ${side?'':'unified'}">`;
+  let hunkIdx = 0;
+  rows.forEach(r=>{
+    if(r.t==='hunk'){
+      html += `<tr class="lh" data-hunk="${hunkIdx++}"><td colspan="${side?5:4}">${r.txt}</td></tr>`;
+    } else if(r.t==='comment' && state.currentFile===0){
+      html += commentBlock();
+    } else if(r.t==='ctx'){
+      if(side) html += `<tr class="lc"><td class="g">${r.o??''}</td><td class="cc">${r.code}</td><td class="g">${r.n??''}</td><td class="s"></td><td class="cc">${r.code}</td></tr>`;
+      else html += `<tr class="lc"><td class="g">${r.o??''}</td><td class="g">${r.n??''}</td><td class="s"></td><td class="cc">${r.code}</td></tr>`;
+    } else if(r.t==='add'){
+      if(side) html += `<tr><td class="g empty"></td><td class="cc empty"></td><td class="g ga">${r.n}<button class="plus" onclick="toast('Composer opens on this line (mock)')">+</button></td><td class="s" style="color:var(--add-tx);background:var(--add-bg)">+</td><td class="cc la">${r.code}</td></tr>`;
+      else html += `<tr class="la"><td class="g"></td><td class="g">${r.n}<button class="plus" onclick="toast('Composer opens on this line (mock)')">+</button></td><td class="s">+</td><td class="cc">${r.code}</td></tr>`;
+    } else if(r.t==='del'){
+      if(side) html += `<tr><td class="g gd">${r.o}</td><td class="cc ld">${r.code}</td><td class="g empty"></td><td class="s"></td><td class="cc empty"></td></tr>`;
+      else html += `<tr class="ld"><td class="g">${r.o}</td><td class="g"></td><td class="s">-</td><td class="cc">${r.code}</td></tr>`;
+    } else if(r.t==='pair'){
+      if(side) html += `<tr><td class="g gd">${r.o}</td><td class="cc ld">${r.del}</td><td class="g ga">${r.n}</td><td class="s" style="color:var(--add-tx);background:var(--add-bg)">+</td><td class="cc la">${r.add}</td></tr>`;
+      else html += `<tr class="ld"><td class="g">${r.o}</td><td class="g"></td><td class="s">-</td><td class="cc">${r.del}</td></tr>
+                    <tr class="la"><td class="g"></td><td class="g">${r.n}</td><td class="s">+</td><td class="cc">${r.add}</td></tr>`;
+    }
+  });
+  html += `</table>`;
+  document.getElementById('diffScroll').innerHTML = html;
+  updateCtx();
+  focusHunk(state.focusHunk, false);
+}
+
+function renderTree(){
+  const main = document.getElementById('treeMain');
+  main.innerHTML = state.files.map((f,i)=>`
+    <button class="sb-item ${i===state.currentFile?'active':''}" onclick="selectFile(${i})" data-name="${f.name}">
+      <span class="chk ${f.viewed?'on':''}" onclick="event.stopPropagation();toggleViewed(${i})"></span>
+      <span class="sb-ic ${f.icon}">${f.icon.toUpperCase()}</span>
+      <span class="sb-name">${f.name}</span>
+      ${f.hasComment?'<span class="sb-cmnt">1</span>':''}
+      <span class="sb-stats">${f.add?'<span class="a">+'+f.add+'</span>':''}${f.del?'<span class="d">-'+f.del+'</span>':''}</span>
+      ${f.agent?'<span class="sb-dot" title="Agent touched since last look"></span>':''}
+    </button>`).join('');
+  document.getElementById('treeCollapsed').innerHTML = state.collapsed.map(f=>`
+    <button class="sb-item dim" data-name="${f.name}" onclick="toast('Collapsed by default — expandable, never hidden.')">
+      <span class="chk"></span>
+      <span class="sb-ic ${f.icon}">${f.icon.toUpperCase()}</span>
+      <span class="sb-name">${f.name}</span>
+      <span class="sb-stats">${f.add?'<span class="a">+'+f.add+'</span>':''}${f.del?'<span class="d">-'+f.del+'</span>':''}</span>
+    </button>`).join('');
+  const v = state.files.filter(f=>f.viewed).length;
+  document.getElementById('progViewed').textContent = `${v} / ${state.files.length} viewed`;
+  const el = document.getElementById('progUnresolved');
+  if(state.unresolvedComments === 0){
+    el.className = 'resolved';
+    el.textContent = 'All resolved';
+  } else {
+    el.className = 'unresolved';
+    el.textContent = `${state.unresolvedComments} unresolved`;
+  }
+}
+
+function markResolved(){
+  state.comment.state='resolved';
+  state.unresolvedComments = Math.max(0, state.unresolvedComments - 1);
+  renderTree();
+  renderDiff();
+  toast('Comment resolved. Great — that closes the loop for Rev 3.');
+}
+
+function updateSpine(){
+  const label = document.getElementById('spineLabel');
+  if(state.applied){
+    label.textContent = 'Rev 3 / 3';
+    document.querySelectorAll('.spine-node').forEach((n,i)=>{
+      n.className = 'spine-node';
+      if(i===0) n.classList.add('done','has-comment');
+      if(i===1) n.classList.add('done');
+      if(i===2) n.classList.add('current');
+    });
+    document.querySelectorAll('.spine-line').forEach(l=>l.classList.remove('dashed'));
+  }
+}
+
+function updateCtx(){
+  document.getElementById('ctxPath').textContent = state.files[state.currentFile].name;
+  const total = document.querySelectorAll('[data-hunk]').length;
+  document.getElementById('ctxHunk').textContent = `hunk ${Math.min(state.focusHunk+1,total)} of ${total}`;
+}
+
+/* ═══════════════ ACTIONS ═══════════════ */
+function selectFile(i){ state.currentFile=i; state.focusHunk=0; renderTree(); renderDiff(); }
+function toggleViewed(i){ state.files[i].viewed=!state.files[i].viewed; renderTree(); }
+function setView(v){
+  state.view=v;
+  document.getElementById('btnSide').classList.toggle('on',v==='side');
+  document.getElementById('btnUni').classList.toggle('on',v==='unified');
+  renderDiff();
+}
+function toggleTheme(){
+  const h=document.documentElement, t=h.getAttribute('data-theme')==='dark'?'light':'dark';
+  h.setAttribute('data-theme',t);
+  document.getElementById('themeIcon').innerHTML = t==='light'
+    ? '<path d="M13.5 8.5a5.5 5.5 0 1 1-7-5.2A4.5 4.5 0 0 0 13.5 8.5z"/>'
+    : '<circle cx="8" cy="8" r="3.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>';
+}
+function focusHunk(i, scroll=true){
+  const hunks = document.querySelectorAll('[data-hunk]');
+  if(!hunks.length) return;
+  state.focusHunk = Math.max(0, Math.min(i, hunks.length-1));
+  // Clear focus classes on all rows
+  document.querySelectorAll('.hunk-focus, .hunk-focus-block').forEach(el=>{
+    el.classList.remove('hunk-focus');
+    el.classList.remove('hunk-focus-block');
+  });
+  const el = hunks[state.focusHunk];
+  el.classList.add('hunk-focus');
+  // Also mark rows in the focused hunk block so gutter+ buttons show visibly
+  let next = el.nextElementSibling;
+  while(next && !next.hasAttribute('data-hunk')){
+    next.classList.add('hunk-focus-block');
+    next = next.nextElementSibling;
+  }
+  if(scroll) el.scrollIntoView({block:'center'});
+  updateCtx();
+}
+function filterTree(q){
+  document.querySelectorAll('.sb-item').forEach(el=>{
+    el.style.display = el.dataset.name.toLowerCase().includes(q.toLowerCase()) ? '' : 'none';
+  });
+}
+
+/* Send Feedback flow: Draft → Submitted → agent revises → banner → apply → Addressed */
+function openSend(){
+  if(state.comment.state!=='draft'){
+    toast('No draft comments to send. Your comment is already Submitted — the agent is on it.');
+    return;
+  }
+  document.getElementById('sendList').innerHTML = `
+    <div class="mrow"><span class="tag tag-mf">Must fix</span>
+    <span style="font-family:var(--font-mono);flex:1">src/auth.py:5</span>
+    <span style="color:var(--tx3)">Iteration count too low...</span></div>`;
+  document.getElementById('sendOverlay').classList.add('show');
+}
+function confirmSend(){
+  document.getElementById('sendOverlay').classList.remove('show');
+  setSync('saving','Saving...');
+  setTimeout(()=>{
+    state.comment.state='submitted';
+    renderDiff();
+    setSync('agent','Agent is revising');
+    toast('Feedback sent. 1 comment submitted and persisted.');
+    setTimeout(()=>{
+      state.agentRevised=true;
+      document.getElementById('revBanner').classList.add('show');
+      setSync('synced','Synced');
+    }, 2600);
+  }, 700);
+}
+function applyRevision(){
+  state.applied=true; state.revision=3;
+  state.comment.state='addressed';
+  document.getElementById('revBanner').classList.remove('show');
+  updateSpine();
+  renderDiff();
+  toast('Now viewing Revision 3. Scroll position and comments preserved.');
+}
+function dismissBanner(){
+  document.getElementById('revBanner').classList.remove('show');
+  toast('Staying on Rev 2. The new revision is queued — reopen anytime from the Rev badge.');
+}
+function setSync(cls,txt){
+  const el=document.getElementById('sync');
+  el.className='tb-sync s-'+cls;
+  document.getElementById('syncTx').textContent=txt;
+}
+let toastTimer;
+function toast(msg){
+  const t=document.getElementById('toast');
+  document.getElementById('toastTx').textContent=msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>t.classList.remove('show'),3200);
+}
+
+/* ═══════════════ KEYBOARD ═══════════════ */
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'){
+    if(e.key==='Escape') e.target.blur();
+    return;
+  }
+  switch(e.key){
+    case 'j': focusHunk(state.focusHunk+1); break;
+    case 'k': focusHunk(state.focusHunk-1); break;
+    case 'n': selectFile((state.currentFile+1)%state.files.length); break;
+    case 'p': selectFile((state.currentFile-1+state.files.length)%state.files.length); break;
+    case 'v': toggleViewed(state.currentFile); break;
+    case 'd': setView(state.view==='side'?'unified':'side'); break;
+    case 't': toggleTheme(); break;
+    case 'c': toast('Composer opens on the focused hunk (mock).'); break;
+    case ']': case '[': toast('Jump to next/previous unresolved comment (mock).'); break;
+    case '/': e.preventDefault(); document.getElementById('filterInput').focus(); break;
+    case '?': document.getElementById('kbOverlay').classList.toggle('show'); break;
+    case 'Escape': document.querySelectorAll('.overlay').forEach(o=>o.classList.remove('show')); break;
+  }
+});
+
+/* init */
+renderTree(); renderDiff();
+</script>
+</body>
+</html>

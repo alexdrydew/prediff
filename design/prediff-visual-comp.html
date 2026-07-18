@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>prediff — Visual Design Comp (Light + Dark)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --font-ui: 'Inter', -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Consolas, monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
+html { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; background: #0d0e12; color: #ccc; }
+body { padding: 48px 40px 80px; }
+
+.comp-header {
+  max-width: 1360px; margin: 0 auto 40px;
+  display: flex; align-items: baseline; gap: 16px;
+}
+.comp-header h1 { font-size: 20px; font-weight: 600; color: #fff; letter-spacing: -0.02em; }
+.comp-header span { font-size: 13px; color: #666; }
+
+.comp-label {
+  max-width: 1360px; margin: 0 auto 12px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: #555;
+  display: flex; align-items: center; gap: 12px;
+}
+.comp-label::after { content: ''; flex: 1; height: 1px; background: #222; }
+
+.frame {
+  max-width: 1360px; margin: 0 auto 56px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 48px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.06);
+  position: relative;
+}
+
+/* ═════════════════════════════════════
+   ANNOTATION CALLOUTS
+   ═════════════════════════════════════ */
+.annotations { position: absolute; inset: 0; pointer-events: none; z-index: 100; }
+.ann {
+  position: absolute;
+  display: flex; align-items: flex-start; gap: 6px;
+  pointer-events: auto;
+}
+.ann-dot {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #3b82f6; color: #fff;
+  font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; box-shadow: 0 1px 4px rgba(59,130,246,.4);
+}
+.ann-dot.agent { background: #6366f1; box-shadow: 0 1px 4px rgba(99,102,241,.4); }
+.ann-dot.sig { background: #10b981; box-shadow: 0 1px 4px rgba(16,185,129,.4); }
+.ann-tip {
+  background: rgba(20,22,28,.92); border: 1px solid rgba(255,255,255,.1);
+  border-radius: 6px; padding: 6px 10px; max-width: 220px;
+  font-size: 11px; line-height: 1.45; color: #bbb;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  backdrop-filter: blur(8px);
+  opacity: 0; transition: opacity .2s;
+}
+.ann-tip strong { color: #fff; font-weight: 600; }
+.ann:hover .ann-tip { opacity: 1; }
+
+/* ═════════════════════════════════════
+   COMP RENDERING — PIXEL-PERFECT STATIC
+   Each "theme" frame is a self-contained mockup,
+   not interactive. Designed for screenshots/export.
+   ═════════════════════════════════════ */
+
+/* ── SHARED ── */
+.mock { display: flex; flex-direction: column; height: 620px; overflow: hidden; }
+.topbar {
+  height: 48px; display: flex; align-items: center; gap: 10px;
+  padding: 0 16px; flex-shrink: 0;
+}
+.tb-logo { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 15px; letter-spacing: -0.02em; }
+.tb-logo svg { opacity: .9; }
+.tb-sep { width: 1px; height: 20px; flex-shrink: 0; }
+.tb-session { font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+.spine { display: inline-flex; align-items: center; gap: 0; padding: 3px 8px; border-radius: 12px; height: 22px; }
+.spine-n { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.spine-l { width: 14px; height: 1.5px; flex-shrink: 0; }
+.spine-lb { font-size: 10px; font-weight: 600; margin-left: 4px; text-transform: uppercase; letter-spacing: .02em; }
+.sync { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; }
+.sync-d { width: 6px; height: 6px; border-radius: 50%; }
+.fill { flex: 1; }
+.toggle { display: flex; border-radius: 6px; overflow: hidden; }
+.toggle span { font-size: 12px; font-weight: 500; padding: 4px 11px; }
+.prog { font-size: 11px; display: flex; align-items: center; gap: 8px; }
+.prog-sep { width: 1px; height: 12px; }
+.icon-btn { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 6px; }
+.btn { font-size: 13px; font-weight: 500; padding: 6px 14px; border-radius: 6px; }
+
+.body-row { display: flex; flex: 1; overflow: hidden; }
+
+/* sidebar */
+.sb { width: 272px; min-width: 272px; display: flex; flex-direction: column; overflow: hidden; }
+.sb-search { padding: 10px 12px; }
+.sb-input { width: 100%; font-size: 13px; padding: 6px 10px 6px 30px; border-radius: 4px; position: relative; }
+.sb-list { flex: 1; padding: 4px 0; overflow: hidden; }
+.sb-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding: 14px 14px 6px; }
+.sb-item { display: flex; align-items: center; gap: 7px; padding: 5px 14px; font-size: 13px; }
+.sb-chk { width: 13px; height: 13px; border-radius: 3px; flex-shrink: 0; position: relative; }
+.sb-chk.on::after { content: ''; position: absolute; left: 2.5px; top: 1px; width: 5px; height: 3px; border-left: 1.5px solid #fff; border-bottom: 1.5px solid #fff; transform: rotate(-45deg); }
+.sb-ic { font-family: var(--font-mono); font-size: 10px; font-weight: 700; width: 14px; text-align: center; }
+.sb-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-stats { font-family: var(--font-mono); font-size: 10px; display: flex; gap: 3px; }
+.sb-cmnt { font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 8px; line-height: 1.6; }
+.sb-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+/* main */
+.mn { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.rev-banner { display: flex; align-items: center; gap: 10px; padding: 9px 20px; font-size: 13px; flex-shrink: 0; }
+.rev-banner b { font-weight: 600; }
+.rev-btn { font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: 4px; }
+.ctx { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 20px; flex-shrink: 0; }
+.ctx-path { font-family: var(--font-mono); font-size: 13px; font-weight: 500; }
+.ctx-hunk { font-size: 11px; }
+.ctx-btn { font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+
+/* diff */
+.diff { flex: 1; overflow: hidden; }
+table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 13px; line-height: 20px; }
+td { padding: 0; vertical-align: top; white-space: pre; }
+.g { width: 46px; min-width: 46px; text-align: right; padding-right: 8px; font-size: 12px; user-select: none; }
+.s { width: 20px; min-width: 20px; text-align: center; font-weight: 500; }
+.cc { padding: 0 12px; }
+.emp { opacity: .35; }
+
+/* comment */
+.cmt { padding: 12px 20px; font-family: var(--font-ui); }
+.cmt-head { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; flex-wrap: wrap; }
+.av { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+.cmt-name { font-size: 13px; font-weight: 600; }
+.tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 3px; }
+.cmt-time { font-size: 11px; }
+.life { font-size: 11px; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; }
+.life-d { width: 6px; height: 6px; border-radius: 50; }
+.cmt-body { font-size: 13px; line-height: 1.55; padding-left: 29px; }
+.cmt-body code { font-family: var(--font-mono); font-size: 11px; padding: 1px 5px; border-radius: 3px; }
+.agent-r { margin-left: 20px; padding-left: 18px; }
+.cmt-actions { padding-left: 29px; margin-top: 6px; display: flex; gap: 10px; font-size: 11px; }
+
+/* keyboard bar */
+.kbar { display: flex; align-items: center; gap: 16px; padding: 4px 16px; flex-shrink: 0; }
+.kh { font-size: 11px; display: flex; align-items: center; gap: 3px; }
+kbd { font-family: var(--font-mono); font-size: 10px; padding: 1px 5px; min-width: 16px; text-align: center; border-radius: 3px; line-height: 1.5; }
+
+/* ═════════════════════════════════════
+   DARK THEME
+   ═════════════════════════════════════ */
+.dark .mock { background: #0b0c0e; color: #e4e6ea; }
+.dark .topbar { background: #161820; border-bottom: 1px solid #282c36; }
+.dark .tb-sep { background: #282c36; }
+.dark .tb-session { color: #e4e6ea; }
+.dark .spine { background: #111318; border: 1px solid #282c36; }
+.dark .spine-n { border: 1.5px solid #5f6775; background: transparent; }
+.dark .spine-n.done { background: #5f6775; border-color: #5f6775; }
+.dark .spine-n.done.hc { background: #3b82f6; border-color: #3b82f6; }
+.dark .spine-n.cur { background: #818cf8; border-color: #818cf8; box-shadow: 0 0 0 3px #1c1e3c; }
+.dark .spine-n.nxt { border-style: dashed; }
+.dark .spine-l { background: #5f6775; opacity: .4; }
+.dark .spine-l.dsh { background: none; border-top: 1.5px dashed #5f6775; opacity: .5; }
+.dark .spine-lb { color: #969dac; }
+.dark .sync { color: #56d364; }
+.dark .sync-d { background: #56d364; }
+.dark .toggle { border: 1px solid #282c36; }
+.dark .toggle span { color: #5f6775; }
+.dark .toggle span.on { background: #1d2028; color: #e4e6ea; }
+.dark .prog { color: #5f6775; }
+.dark .prog-sep { background: #282c36; }
+.dark .prog .warn { color: #e5a817; font-weight: 500; }
+.dark .icon-btn { border: 1px solid #282c36; color: #5f6775; }
+.dark .btn-s { border: 1px solid #282c36; color: #e4e6ea; }
+.dark .btn-p { background: #3b82f6; color: #fff; }
+
+.dark .sb { background: #111318; border-right: 1px solid #282c36; }
+.dark .sb-search { border-bottom: 1px solid #1e2129; }
+.dark .sb-input { background: #161820; border: 1px solid #282c36; color: #e4e6ea; }
+.dark .sb-label { color: #5f6775; }
+.dark .sb-item.active { background: #172240; box-shadow: inset 2px 0 0 #3b82f6; }
+.dark .sb-item.dim { opacity: .4; }
+.dark .sb-chk { border: 1.5px solid #282c36; }
+.dark .sb-chk.on { background: #3b82f6; border-color: #3b82f6; }
+.dark .sb-ic.m { color: #e5a817; }
+.dark .sb-ic.a { color: #56d364; }
+.dark .sb-ic.d { color: #f85149; }
+.dark .sb-cmnt { background: #172240; color: #3b82f6; }
+.dark .sb-dot { background: #818cf8; }
+.dark .sb-stats { color: #5f6775; }
+.dark .sb-stats .sa { color: #56d364; }
+.dark .sb-stats .sd { color: #f85149; }
+
+.dark .rev-banner { background: #1c1e3c; border-bottom: 1px solid rgba(129,140,248,.18); }
+.dark .rev-banner b { color: #818cf8; }
+.dark .rev-banner .sub { color: #969dac; }
+.dark .rev-go { background: #818cf8; color: #fff; }
+.dark .rev-stay { background: transparent; border: 1px solid #282c36; color: #969dac; }
+
+.dark .ctx { background: #111318; border-bottom: 1px solid #282c36; }
+.dark .ctx-path { color: #e4e6ea; }
+.dark .ctx-hunk { color: #5f6775; }
+.dark .ctx-btn { border: 1px solid #282c36; color: #5f6775; }
+
+.dark .g { color: #464e5e; background: #111318; border-right: 1px solid #1e2129; }
+.dark .g:first-child { border-right: none; }
+.dark tr.la { background: rgba(46,160,67,.12); }
+.dark tr.la .g { background: rgba(46,160,67,.2); }
+.dark tr.la .s { color: #56d364; }
+.dark tr.ld { background: rgba(248,81,73,.12); }
+.dark tr.ld .g { background: rgba(248,81,73,.2); }
+.dark tr.ld .s { color: #f85149; }
+.dark tr.lc .cc { color: #8b92a0; }
+.dark tr.lh { background: #172240; }
+.dark tr.lh td { color: #5b9cf6; font-size: 12px; font-weight: 500; padding: 6px 12px; }
+.dark .wa { background: rgba(46,160,67,.34); border-radius: 2px; padding: 0 1px; }
+.dark .wd { background: rgba(248,81,73,.34); border-radius: 2px; padding: 0 1px; }
+.dark .emp-g { background: transparent; color: transparent; }
+.dark .emp-c { background: repeating-linear-gradient(135deg,transparent,transparent 6px,#1e2129 6px,#1e2129 7px); opacity: .35; }
+
+.dark .cmt-wrap { background: #161820; border-top: 1px solid #282c36; border-bottom: 1px solid #282c36; }
+.dark .cmt { border-bottom: 1px solid #1e2129; }
+.dark .av-u { background: #172240; color: #3b82f6; border: 1px solid rgba(59,130,246,.3); }
+.dark .av-a { background: #1c1e3c; color: #818cf8; border: 1px solid rgba(129,140,248,.25); }
+.dark .tag-mf { color: #f85149; background: rgba(248,81,73,.12); border: 1px solid rgba(248,81,73,.2); }
+.dark .cmt-time { color: #5f6775; }
+.dark .life-sub { color: #969dac; }
+.dark .life-sub .life-d { background: #969dac; }
+.dark .cmt-body { color: #e4e6ea; }
+.dark .cmt-body code { background: #111318; border: 1px solid #1e2129; }
+.dark .agent-r { border-left: 2px solid #818cf8; }
+.dark .tag-addr { color: #818cf8; background: #1c1e3c; border: 1px solid rgba(129,140,248,.25); }
+.dark .life-addr { color: #818cf8; }
+.dark .life-addr .life-d { background: #818cf8; }
+.dark .cmt-actions a { color: #3b82f6; text-decoration: none; }
+
+.dark .kbar { background: #111318; border-top: 1px solid #282c36; }
+.dark .kh { color: #5f6775; }
+.dark kbd { background: #161820; border: 1px solid #282c36; color: #969dac; }
+
+/* ═════════════════════════════════════
+   LIGHT THEME
+   ═════════════════════════════════════ */
+.light .mock { background: #ffffff; color: #111419; }
+.light .topbar { background: #ffffff; border-bottom: 1px solid #dfe2e8; }
+.light .tb-sep { background: #dfe2e8; }
+.light .tb-session { color: #111419; }
+.light .spine { background: #f6f7f9; border: 1px solid #dfe2e8; }
+.light .spine-n { border: 1.5px solid #8a919f; background: transparent; }
+.light .spine-n.done { background: #8a919f; border-color: #8a919f; }
+.light .spine-n.done.hc { background: #2563eb; border-color: #2563eb; }
+.light .spine-n.cur { background: #6366f1; border-color: #6366f1; box-shadow: 0 0 0 3px #eef0fd; }
+.light .spine-n.nxt { border-style: dashed; }
+.light .spine-l { background: #8a919f; opacity: .3; }
+.light .spine-l.dsh { background: none; border-top: 1.5px dashed #8a919f; opacity: .4; }
+.light .spine-lb { color: #585f6e; }
+.light .sync { color: #1a7f37; }
+.light .sync-d { background: #1a7f37; }
+.light .toggle { border: 1px solid #dfe2e8; }
+.light .toggle span { color: #8a919f; }
+.light .toggle span.on { background: #eef0f3; color: #111419; }
+.light .prog { color: #8a919f; }
+.light .prog-sep { background: #dfe2e8; }
+.light .prog .warn { color: #b45309; font-weight: 500; }
+.light .icon-btn { border: 1px solid #dfe2e8; color: #8a919f; }
+.light .btn-s { border: 1px solid #dfe2e8; color: #111419; }
+.light .btn-p { background: #2563eb; color: #fff; }
+
+.light .sb { background: #f6f7f9; border-right: 1px solid #dfe2e8; }
+.light .sb-search { border-bottom: 1px solid #eceef2; }
+.light .sb-input { background: #ffffff; border: 1px solid #dfe2e8; color: #111419; }
+.light .sb-label { color: #8a919f; }
+.light .sb-item.active { background: #eaf0fe; box-shadow: inset 2px 0 0 #2563eb; }
+.light .sb-item.dim { opacity: .4; }
+.light .sb-chk { border: 1.5px solid #dfe2e8; }
+.light .sb-chk.on { background: #2563eb; border-color: #2563eb; }
+.light .sb-ic.m { color: #b45309; }
+.light .sb-ic.a { color: #1a7f37; }
+.light .sb-ic.d { color: #cf222e; }
+.light .sb-cmnt { background: #eaf0fe; color: #2563eb; }
+.light .sb-dot { background: #6366f1; }
+.light .sb-stats { color: #8a919f; }
+.light .sb-stats .sa { color: #1a7f37; }
+.light .sb-stats .sd { color: #cf222e; }
+
+.light .rev-banner { background: #eef0fd; border-bottom: 1px solid rgba(99,102,241,.18); }
+.light .rev-banner b { color: #6366f1; }
+.light .rev-banner .sub { color: #585f6e; }
+.light .rev-go { background: #6366f1; color: #fff; }
+.light .rev-stay { background: transparent; border: 1px solid #dfe2e8; color: #585f6e; }
+
+.light .ctx { background: #f6f7f9; border-bottom: 1px solid #dfe2e8; }
+.light .ctx-path { color: #111419; }
+.light .ctx-hunk { color: #8a919f; }
+.light .ctx-btn { border: 1px solid #dfe2e8; color: #8a919f; }
+
+.light .g { color: #a0a7b4; background: #f6f7f9; border-right: 1px solid #eceef2; }
+.light .g:first-child { border-right: none; }
+.light tr.la { background: #e2f5e8; }
+.light tr.la .g { background: #d1f0da; }
+.light tr.la .s { color: #1a7f37; }
+.light tr.ld { background: #fceaea; }
+.light tr.ld .g { background: #f8dcda; }
+.light tr.ld .s { color: #cf222e; }
+.light tr.lc .cc { color: #585f6e; }
+.light tr.lh { background: #eaf0fe; }
+.light tr.lh td { color: #2563eb; font-size: 12px; font-weight: 500; padding: 6px 12px; }
+.light .wa { background: #abf2bc; border-radius: 2px; padding: 0 1px; }
+.light .wd { background: #ffcecb; border-radius: 2px; padding: 0 1px; }
+.light .emp-g { background: transparent; color: transparent; }
+.light .emp-c { background: repeating-linear-gradient(135deg,transparent,transparent 6px,#eceef2 6px,#eceef2 7px); opacity: .35; }
+
+.light .cmt-wrap { background: #ffffff; border-top: 1px solid #dfe2e8; border-bottom: 1px solid #dfe2e8; }
+.light .cmt { border-bottom: 1px solid #eceef2; }
+.light .av-u { background: #eaf0fe; color: #2563eb; border: 1px solid rgba(37,99,235,.25); }
+.light .av-a { background: #eef0fd; color: #6366f1; border: 1px solid rgba(99,102,241,.22); }
+.light .tag-mf { color: #cf222e; background: #fee2e2; border: 1px solid rgba(207,34,46,.18); }
+.light .cmt-time { color: #8a919f; }
+.light .life-sub { color: #585f6e; }
+.light .life-sub .life-d { background: #585f6e; }
+.light .cmt-body { color: #111419; }
+.light .cmt-body code { background: #f6f7f9; border: 1px solid #eceef2; }
+.light .agent-r { border-left: 2px solid #6366f1; }
+.light .tag-addr { color: #6366f1; background: #eef0fd; border: 1px solid rgba(99,102,241,.22); }
+.light .life-addr { color: #6366f1; }
+.light .life-addr .life-d { background: #6366f1; }
+.light .cmt-actions a { color: #2563eb; text-decoration: none; }
+
+.light .kbar { background: #f6f7f9; border-top: 1px solid #dfe2e8; }
+.light .kh { color: #8a919f; }
+.light kbd { background: #ffffff; border: 1px solid #dfe2e8; color: #585f6e; }
+</style>
+</head>
+<body>
+
+<div class="comp-header">
+  <h1>prediff — Visual Design Comp</h1>
+  <span>Hero screen, main review view. Deliverable 6/10. Both themes shown at the same viewport. Hover numbered dots for design annotations.</span>
+</div>
+
+<!-- ═════════════════════════════════════
+     DARK MODE
+     ═════════════════════════════════════ -->
+<div class="comp-label">Dark mode</div>
+<div class="frame dark">
+  <div class="annotations">
+    <div class="ann" style="top:14px;left:186px"><div class="ann-dot sig">1</div><div class="ann-tip"><strong>Revision spine (signature element).</strong> Unique to prediff. Encodes the multi-rev agent loop in a glanceable timeline. No other diff tool has this.</div></div>
+    <div class="ann" style="top:54px;left:98px"><div class="ann-dot agent">2</div><div class="ann-tip"><strong>Agent-pushed revision banner.</strong> Never auto-swaps the diff. Reviewer explicitly opts in. Persists until acted on.</div></div>
+    <div class="ann" style="top:115px;left:186px"><div class="ann-dot">3</div><div class="ann-tip"><strong>Active file + comment count.</strong> Blue left-border active state, comment badge, agent-dot (violet) showing the file was touched since last look.</div></div>
+    <div class="ann" style="top:350px;right:30px"><div class="ann-dot">4</div><div class="ann-tip"><strong>Comment thread inline.</strong> MUST FIX severity tag (primary). Lifecycle as a dot+word (secondary), pushed right. Agent response indented with violet left-border.</div></div>
+    <div class="ann" style="top:14px;right:220px"><div class="ann-dot">5</div><div class="ann-tip"><strong>Unresolved count.</strong> Amber when >0, green "All resolved" when done. Always visible — no hunting for comment status.</div></div>
+    <div class="ann" style="bottom:8px;left:14px"><div class="ann-dot">6</div><div class="ann-tip"><strong>Keyboard hint strip.</strong> Dismissible. Shows the most common shortcuts. Full overlay on <kbd>?</kbd>.</div></div>
+  </div>
+  <div class="mock">
+    <!-- Topbar -->
+    <div class="topbar">
+      <div class="tb-logo"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="2" width="14" height="14" rx="3.5" stroke="currentColor" stroke-width="1.4"/><rect x="6" y="5.5" width="2" height="7" rx=".5" fill="currentColor" opacity=".65"/><rect x="10" y="7.5" width="2" height="5" rx=".5" fill="currentColor" opacity=".65"/></svg>prediff</div>
+      <div class="tb-sep"></div>
+      <span class="tb-session">fix-auth-hashing</span>
+      <div class="spine">
+        <span class="spine-n done hc"></span><span class="spine-l"></span>
+        <span class="spine-n cur"></span><span class="spine-l dsh"></span>
+        <span class="spine-n nxt"></span>
+        <span class="spine-lb">Rev 2 / 3</span>
+      </div>
+      <div class="sync"><span class="sync-d"></span>Synced</div>
+      <div class="fill"></div>
+      <div class="toggle"><span class="on">Side-by-side</span><span>Unified</span></div>
+      <div class="prog"><span>1 / 3 viewed</span><span class="prog-sep"></span><span class="warn">1 unresolved</span></div>
+      <div class="icon-btn"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8.5a5.5 5.5 0 1 1-7-5.2A4.5 4.5 0 0 0 13.5 8.5z"/></svg></div>
+      <span class="btn btn-s">Mark Ready</span>
+      <span class="btn btn-p">Send Feedback</span>
+    </div>
+    <div class="body-row">
+      <!-- Sidebar -->
+      <div class="sb">
+        <div class="sb-search"><div class="sb-input">🔍 Filter files... <span style="float:right;font-family:var(--font-mono);font-size:10px;opacity:.4">/</span></div></div>
+        <div class="sb-list">
+          <div class="sb-label">Changed files</div>
+          <div class="sb-item active">
+            <span class="sb-chk"></span><span class="sb-ic m">M</span><span class="sb-name">src/auth.py</span>
+            <span class="sb-cmnt">1</span>
+            <span class="sb-stats"><span class="sa">+12</span> <span class="sd">-2</span></span>
+            <span class="sb-dot"></span>
+          </div>
+          <div class="sb-item">
+            <span class="sb-chk on"></span><span class="sb-ic m">M</span><span class="sb-name">src/session.py</span>
+            <span class="sb-stats"><span class="sa">+4</span> <span class="sd">-1</span></span>
+          </div>
+          <div class="sb-item">
+            <span class="sb-chk"></span><span class="sb-ic a">A</span><span class="sb-name">src/audit_log.py</span>
+            <span class="sb-stats"><span class="sa">+28</span></span>
+            <span class="sb-dot"></span>
+          </div>
+          <div class="sb-label" style="margin-top:4px">Auto-collapsed</div>
+          <div class="sb-item dim">
+            <span class="sb-chk"></span><span class="sb-ic d">D</span><span class="sb-name">tests/__snapshots__/auth.snap</span>
+            <span class="sb-stats"><span class="sd">-84</span></span>
+          </div>
+          <div class="sb-item dim">
+            <span class="sb-chk"></span><span class="sb-ic m">M</span><span class="sb-name">package-lock.json</span>
+            <span class="sb-stats"><span class="sa">+412</span> <span class="sd">-318</span></span>
+          </div>
+        </div>
+      </div>
+      <!-- Main -->
+      <div class="mn">
+        <div class="rev-banner"><b>Agent pushed Revision 3</b><span class="sub"> — responded to your feedback in src/auth.py</span><div class="fill"></div><span class="rev-btn rev-go">Review now</span><span class="rev-btn rev-stay" style="margin-left:4px">Keep reviewing Rev 2</span></div>
+        <div class="ctx"><span class="ctx-path">src/auth.py</span><span class="ctx-hunk">hunk 1 of 2</span><div class="fill"></div><span class="ctx-btn">Expand context</span></div>
+        <div class="diff">
+          <table>
+            <tr class="lh"><td colspan="5" style="padding:6px 12px">@@ -1,10 +1,18 @@</td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">1</td><td class="s">+</td><td class="cc"><span class="wa">import hashlib</span></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">2</td><td class="s">+</td><td class="cc"><span class="wa">import hmac</span></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">3</td><td class="s">+</td><td class="cc"></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">4</td><td class="s">+</td><td class="cc"><span class="wa">def hash_password(password, salt):</span></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">5</td><td class="s">+</td><td class="cc">    return hashlib.<span class="wa">pbkdf2_hmac</span>("sha256", password.encode(), salt, <span class="wa">100000</span>)</td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">6</td><td class="s">+</td><td class="cc"></td></tr>
+            <tr class="lc"><td class="g">1</td><td class="cc">def login(username, password):</td><td class="g">7</td><td class="s"></td><td class="cc">def login(username, password):</td></tr>
+            <tr class="lc"><td class="g">2</td><td class="cc">    user = db.find_user(username)</td><td class="g">8</td><td class="s"></td><td class="cc">    user = db.find_user(username)</td></tr>
+            <tr class="lc"><td class="g">3</td><td class="cc">    if user is None:</td><td class="g">9</td><td class="s"></td><td class="cc">    if user is None:</td></tr>
+            <tr class="lc"><td class="g">4</td><td class="cc">        return None</td><td class="g">10</td><td class="s"></td><td class="cc">        return None</td></tr>
+            <tr class="ld"><td class="g">5</td><td class="cc">    if user.password != <span class="wd">password</span>:</td><td class="g emp-g"></td><td class="s"></td><td class="cc emp-c"></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">11</td><td class="s">+</td><td class="cc">    <span class="wa">hashed = hash_password(password, user.salt)</span></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">12</td><td class="s">+</td><td class="cc">    if not <span class="wa">hmac.compare_digest(hashed, user.password_hash)</span>:</td></tr>
+            <!-- Comment thread -->
+            <tr class="cmt-row"><td colspan="5">
+              <div class="cmt-wrap">
+                <div class="cmt">
+                  <div class="cmt-head">
+                    <div class="av av-u">J</div><span class="cmt-name">You</span>
+                    <span class="tag tag-mf">Must fix</span>
+                    <span class="cmt-time">2 min ago</span>
+                    <div class="fill"></div>
+                    <span class="life life-sub"><span class="life-d" style="width:6px;height:6px;border-radius:50%;display:inline-block"></span>Submitted</span>
+                  </div>
+                  <div class="cmt-body">The iteration count of <code>100000</code> is too low for 2024. Use at least <code>600000</code> per OWASP guidance, or switch to argon2id.</div>
+                </div>
+                <div class="cmt agent-r">
+                  <div class="cmt-head">
+                    <div class="av av-a">A</div><span class="cmt-name">Agent</span>
+                    <span class="cmt-time">just now</span>
+                    <div class="fill"></div>
+                    <span class="life life-addr"><span class="life-d" style="width:6px;height:6px;border-radius:50%;display:inline-block"></span>Addressed in Rev 3</span>
+                  </div>
+                  <div class="cmt-body">Updated to <code>600000</code> iterations in Revision 3, with a comment citing the OWASP reference.</div>
+                  <div class="cmt-actions"><a>Mark resolved</a><a>Reopen</a></div>
+                </div>
+              </div>
+            </td></tr>
+            <tr class="lc"><td class="g">6</td><td class="cc">        return None</td><td class="g">13</td><td class="s"></td><td class="cc">        return None</td></tr>
+            <tr class="lc"><td class="g">7</td><td class="cc">    return create_session(user)</td><td class="g">14</td><td class="s"></td><td class="cc">    return create_session(user)</td></tr>
+          </table>
+        </div>
+        <!-- Keyboard bar -->
+      </div>
+    </div>
+    <div class="kbar">
+      <div class="kh"><kbd>j</kbd><kbd>k</kbd> hunks</div>
+      <div class="kh"><kbd>n</kbd><kbd>p</kbd> files</div>
+      <div class="kh"><kbd>c</kbd> comment</div>
+      <div class="kh"><kbd>v</kbd> viewed</div>
+      <div class="kh"><kbd>d</kbd> view</div>
+      <div class="kh"><kbd>t</kbd> theme</div>
+      <div class="fill"></div>
+      <div class="kh"><kbd>?</kbd> all shortcuts</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════════════════════════════════
+     LIGHT MODE
+     ═════════════════════════════════════ -->
+<div class="comp-label">Light mode</div>
+<div class="frame light">
+  <div class="annotations">
+    <div class="ann" style="top:300px;left:288px"><div class="ann-dot">7</div><div class="ann-tip"><strong>Side-by-side empty cells.</strong> Diagonal hatch pattern at low opacity. Reads as "no corresponding line" — intentionally not a filled block.</div></div>
+    <div class="ann" style="top:240px;right:30px"><div class="ann-dot agent">8</div><div class="ann-tip"><strong>Word-level diff highlighting.</strong> Green/red inline highlights on the specific tokens that changed, not just the whole line.</div></div>
+    <div class="ann" style="top:92px;left:14px"><div class="ann-dot">9</div><div class="ann-tip"><strong>Context header.</strong> Sticky — always shows current file path + "hunk N of M" so the reviewer never loses orientation, even on large diffs.</div></div>
+  </div>
+  <div class="mock">
+    <!-- Topbar -->
+    <div class="topbar">
+      <div class="tb-logo"><svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="2" width="14" height="14" rx="3.5" stroke="currentColor" stroke-width="1.4"/><rect x="6" y="5.5" width="2" height="7" rx=".5" fill="currentColor" opacity=".65"/><rect x="10" y="7.5" width="2" height="5" rx=".5" fill="currentColor" opacity=".65"/></svg>prediff</div>
+      <div class="tb-sep"></div>
+      <span class="tb-session">fix-auth-hashing</span>
+      <div class="spine">
+        <span class="spine-n done hc"></span><span class="spine-l"></span>
+        <span class="spine-n cur"></span><span class="spine-l dsh"></span>
+        <span class="spine-n nxt"></span>
+        <span class="spine-lb">Rev 2 / 3</span>
+      </div>
+      <div class="sync"><span class="sync-d"></span>Synced</div>
+      <div class="fill"></div>
+      <div class="toggle"><span class="on">Side-by-side</span><span>Unified</span></div>
+      <div class="prog"><span>1 / 3 viewed</span><span class="prog-sep"></span><span class="warn">1 unresolved</span></div>
+      <div class="icon-btn"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg></div>
+      <span class="btn btn-s">Mark Ready</span>
+      <span class="btn btn-p">Send Feedback</span>
+    </div>
+    <div class="body-row">
+      <!-- Sidebar -->
+      <div class="sb">
+        <div class="sb-search"><div class="sb-input">🔍 Filter files... <span style="float:right;font-family:var(--font-mono);font-size:10px;opacity:.4">/</span></div></div>
+        <div class="sb-list">
+          <div class="sb-label">Changed files</div>
+          <div class="sb-item active">
+            <span class="sb-chk"></span><span class="sb-ic m">M</span><span class="sb-name">src/auth.py</span>
+            <span class="sb-cmnt">1</span>
+            <span class="sb-stats"><span class="sa">+12</span> <span class="sd">-2</span></span>
+            <span class="sb-dot"></span>
+          </div>
+          <div class="sb-item">
+            <span class="sb-chk on"></span><span class="sb-ic m">M</span><span class="sb-name">src/session.py</span>
+            <span class="sb-stats"><span class="sa">+4</span> <span class="sd">-1</span></span>
+          </div>
+          <div class="sb-item">
+            <span class="sb-chk"></span><span class="sb-ic a">A</span><span class="sb-name">src/audit_log.py</span>
+            <span class="sb-stats"><span class="sa">+28</span></span>
+            <span class="sb-dot"></span>
+          </div>
+          <div class="sb-label" style="margin-top:4px">Auto-collapsed</div>
+          <div class="sb-item dim">
+            <span class="sb-chk"></span><span class="sb-ic d">D</span><span class="sb-name">tests/__snapshots__/auth.snap</span>
+            <span class="sb-stats"><span class="sd">-84</span></span>
+          </div>
+          <div class="sb-item dim">
+            <span class="sb-chk"></span><span class="sb-ic m">M</span><span class="sb-name">package-lock.json</span>
+            <span class="sb-stats"><span class="sa">+412</span> <span class="sd">-318</span></span>
+          </div>
+        </div>
+      </div>
+      <!-- Main -->
+      <div class="mn">
+        <div class="rev-banner"><b>Agent pushed Revision 3</b><span class="sub"> — responded to your feedback in src/auth.py</span><div class="fill"></div><span class="rev-btn rev-go">Review now</span><span class="rev-btn rev-stay" style="margin-left:4px">Keep reviewing Rev 2</span></div>
+        <div class="ctx"><span class="ctx-path">src/auth.py</span><span class="ctx-hunk">hunk 1 of 2</span><div class="fill"></div><span class="ctx-btn">Expand context</span></div>
+        <div class="diff">
+          <table>
+            <tr class="lh"><td colspan="5" style="padding:6px 12px">@@ -1,10 +1,18 @@</td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">1</td><td class="s">+</td><td class="cc"><span class="wa">import hashlib</span></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">2</td><td class="s">+</td><td class="cc"><span class="wa">import hmac</span></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">3</td><td class="s">+</td><td class="cc"></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">4</td><td class="s">+</td><td class="cc"><span class="wa">def hash_password(password, salt):</span></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">5</td><td class="s">+</td><td class="cc">    return hashlib.<span class="wa">pbkdf2_hmac</span>("sha256", password.encode(), salt, <span class="wa">100000</span>)</td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">6</td><td class="s">+</td><td class="cc"></td></tr>
+            <tr class="lc"><td class="g">1</td><td class="cc">def login(username, password):</td><td class="g">7</td><td class="s"></td><td class="cc">def login(username, password):</td></tr>
+            <tr class="lc"><td class="g">2</td><td class="cc">    user = db.find_user(username)</td><td class="g">8</td><td class="s"></td><td class="cc">    user = db.find_user(username)</td></tr>
+            <tr class="lc"><td class="g">3</td><td class="cc">    if user is None:</td><td class="g">9</td><td class="s"></td><td class="cc">    if user is None:</td></tr>
+            <tr class="lc"><td class="g">4</td><td class="cc">        return None</td><td class="g">10</td><td class="s"></td><td class="cc">        return None</td></tr>
+            <tr class="ld"><td class="g">5</td><td class="cc">    if user.password != <span class="wd">password</span>:</td><td class="g emp-g"></td><td class="s"></td><td class="cc emp-c"></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">11</td><td class="s">+</td><td class="cc">    <span class="wa">hashed = hash_password(password, user.salt)</span></td></tr>
+            <tr class="la"><td class="g emp-g"></td><td class="cc emp-c"></td><td class="g">12</td><td class="s">+</td><td class="cc">    if not <span class="wa">hmac.compare_digest(hashed, user.password_hash)</span>:</td></tr>
+            <!-- Comment thread -->
+            <tr class="cmt-row"><td colspan="5">
+              <div class="cmt-wrap">
+                <div class="cmt">
+                  <div class="cmt-head">
+                    <div class="av av-u">J</div><span class="cmt-name">You</span>
+                    <span class="tag tag-mf">Must fix</span>
+                    <span class="cmt-time">2 min ago</span>
+                    <div class="fill"></div>
+                    <span class="life life-sub"><span class="life-d" style="width:6px;height:6px;border-radius:50%;display:inline-block"></span>Submitted</span>
+                  </div>
+                  <div class="cmt-body">The iteration count of <code>100000</code> is too low for 2024. Use at least <code>600000</code> per OWASP guidance, or switch to argon2id.</div>
+                </div>
+                <div class="cmt agent-r">
+                  <div class="cmt-head">
+                    <div class="av av-a">A</div><span class="cmt-name">Agent</span>
+                    <span class="cmt-time">just now</span>
+                    <div class="fill"></div>
+                    <span class="life life-addr"><span class="life-d" style="width:6px;height:6px;border-radius:50%;display:inline-block"></span>Addressed in Rev 3</span>
+                  </div>
+                  <div class="cmt-body">Updated to <code>600000</code> iterations in Revision 3, with a comment citing the OWASP reference.</div>
+                  <div class="cmt-actions"><a>Mark resolved</a><a>Reopen</a></div>
+                </div>
+              </div>
+            </td></tr>
+            <tr class="lc"><td class="g">6</td><td class="cc">        return None</td><td class="g">13</td><td class="s"></td><td class="cc">        return None</td></tr>
+            <tr class="lc"><td class="g">7</td><td class="cc">    return create_session(user)</td><td class="g">14</td><td class="s"></td><td class="cc">    return create_session(user)</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="kbar">
+      <div class="kh"><kbd>j</kbd><kbd>k</kbd> hunks</div>
+      <div class="kh"><kbd>n</kbd><kbd>p</kbd> files</div>
+      <div class="kh"><kbd>c</kbd> comment</div>
+      <div class="kh"><kbd>v</kbd> viewed</div>
+      <div class="kh"><kbd>d</kbd> view</div>
+      <div class="kh"><kbd>t</kbd> theme</div>
+      <div class="fill"></div>
+      <div class="kh"><kbd>?</kbd> all shortcuts</div>
+    </div>
+  </div>
+</div>
+
+<div style="max-width:1360px;margin:0 auto;padding:24px 0 48px;color:#555;font-size:12px;text-align:center">
+  prediff — visual design comp — deliverable 6/10 (hero screen, light + dark) — hover numbered dots for design annotations
+</div>
+
+</body>
+</html>

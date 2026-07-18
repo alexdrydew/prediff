@@ -1,0 +1,114 @@
+/* prediff — design tokens
+   Companion to prediff-token-foundation.md. Import this file directly. */
+
+:root {
+  --font-ui: -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Consolas, monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  --filetree-width: 280px;
+  --filetree-width-min: 200px;
+  --filetree-width-max: 480px;
+  --topbar-height: 48px;
+  --context-header-height: 36px;
+  --composer-max-width: 680px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+}
+
+:root[data-theme="light"] {
+  --bg-canvas: #ffffff;
+  --bg-surface: #f7f8fa;
+  --bg-surface-raised: #ffffff;
+  --bg-surface-hover: #f0f1f4;
+  --border-default: #e2e4e9;
+  --border-subtle: #edeef1;
+
+  --text-primary: #0d0f14;
+  --text-secondary: #5b6472;
+  --text-tertiary: #8b93a1;
+  --text-on-accent: #ffffff;
+
+  --accent-primary: #2563eb;
+  --accent-primary-hover: #1d4ed8;
+  --accent-primary-subtle: #eaf0fe;
+
+  --accent-agent: #6366f1;
+  --accent-agent-subtle: #eeeefd;
+
+  --diff-add-bg: #e9f5ec;
+  --diff-add-text: #1a7f37;
+  --diff-add-border: #cfe9d5;
+  --diff-remove-bg: #fbebeb;
+  --diff-remove-text: #b42318;
+  --diff-remove-border: #f3d3d3;
+  --diff-context-text: #5b6472;
+  --diff-whitespace-bg: #f3f3f4;
+
+  --status-caution: #b45309;
+  --status-caution-bg: #fef3c7;
+  --status-error: #b42318;
+  --status-error-bg: #fee4e2;
+  --status-success: #1a7f37;
+  --status-success-bg: #e9f5ec;
+
+  --code-block-bg: #16181f;
+  --code-block-text: #e6e8eb;
+}
+
+:root[data-theme="dark"] {
+  --bg-canvas: #0a0b0d;
+  --bg-surface: #111318;
+  --bg-surface-raised: #16181f;
+  --bg-surface-hover: #1c1f26;
+  --border-default: #262a33;
+  --border-subtle: #1c1f26;
+
+  --text-primary: #e6e8eb;
+  --text-secondary: #9aa3b2;
+  --text-tertiary: #676f7d;
+  --text-on-accent: #ffffff;
+
+  --accent-primary: #3b82f6;
+  --accent-primary-hover: #60a5fa;
+  --accent-primary-subtle: #16223d;
+
+  --accent-agent: #818cf8;
+  --accent-agent-subtle: #1e1f3a;
+
+  --diff-add-bg: rgba(46, 160, 67, 0.13);
+  --diff-add-text: #4ade80;
+  --diff-add-border: rgba(46, 160, 67, 0.28);
+  --diff-remove-bg: rgba(248, 81, 73, 0.13);
+  --diff-remove-text: #f87171;
+  --diff-remove-border: rgba(248, 81, 73, 0.28);
+  --diff-context-text: #9aa3b2;
+  --diff-whitespace-bg: #16181f;
+
+  --status-caution: #f0b429;
+  --status-caution-bg: #2a2210;
+  --status-error: #f87171;
+  --status-error-bg: #2a1515;
+  --status-success: #4ade80;
+  --status-success-bg: #10261a;
+
+  --code-block-bg: #16181f;
+  --code-block-text: #e6e8eb;
+}
