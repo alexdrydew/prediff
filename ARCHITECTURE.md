@@ -67,10 +67,11 @@ needed, open browser.
   live updates (new diff generation, comment resolved by agent, agent replies).
 - Outlives the agent process (detached spawn). `--ttl` option to self-stop
   after N minutes idle (no UI or CLI activity), default a few hours.
-- Watches the repo (debounced `git status --porcelain` + head hash, plus
+- Watches the repo (debounced `git status --porcelain -uall` + head hash, plus
   mtime+size of dirty paths — porcelain output alone doesn't change when an
-  already-dirty file is edited again) to auto-refresh the diff when the range
-  is `working`/`staged`.
+  already-dirty file is edited again; `-uall` lists untracked files
+  individually so creating/editing one, even inside an untracked directory,
+  is detected) to auto-refresh the diff when the range is `working`/`staged`.
 
 ### 3. Diff engine
 
@@ -82,6 +83,10 @@ needed, open browser.
     status, generation number. Fast even for huge diffs.
   - `GET /api/diff/file?path=…` → hunks for one file, on demand.
 - Binary/huge-file guards (skip content over a size threshold, offer raw).
+- The `working` range also includes **untracked** files (agents create files
+  constantly): enumerated via `git ls-files --others --exclude-standard`,
+  reported as `added`, and diffed against `/dev/null` with
+  `git diff --no-index` — the index is never mutated (no `git add -N`).
 
 ### 4. Persistence & the review model
 

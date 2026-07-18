@@ -4,7 +4,7 @@
  */
 
 import path from "node:path";
-import { git, revParse } from "./exec";
+import { git, GitError, revParse, type GitResult } from "./exec";
 import type {
   DiffManifest,
   FileDiff,
@@ -166,6 +166,71 @@ function parseNumstat(out: string): NumstatEntry[] {
   return entries;
 }
 
+// ---------------------------------------------------------------------------
+// Untracked files (working range only)
+//
+// `git diff HEAD` silently omits files git doesn't know about yet, but a
+// coding agent's newly created files are exactly what a review must show.
+// For the `working` range we enumerate them (respecting .gitignore) and diff
+// each against /dev/null — without `git add -N`, so the index is never
+// mutated behind the user's back.
+
+/** Untracked, non-ignored files (`ls-files --others --exclude-standard`). */
+export async function listUntrackedFiles(repo: string): Promise<string[]> {
+  const r = await git(repo, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  return r.stdout.split("\0").filter((p) => p.length > 0);
+}
+
+/** Bounded-concurrency map: each untracked file costs one git subprocess. */
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (let i = next++; i < items.length; i = next++) {
+        results[i] = await fn(items[i]!);
+      }
+    }),
+  );
+  return results;
+}
+
+const UNTRACKED_CONCURRENCY = 16;
+
+/**
+ * Run `git diff --no-index -- /dev/null <path>` with the given extra flags.
+ * `--no-index` exits 1 whenever the sides differ — that's success here; only
+ * codes > 1 are real errors.
+ */
+async function untrackedDiff(repo: string, flags: string[], filePath: string): Promise<GitResult> {
+  const args = ["diff", "--no-color", "--no-index", ...flags, "--", "/dev/null", filePath];
+  const r = await git(repo, args, { allowFail: true });
+  if (r.code > 1) throw new GitError(args, r.code, r.stderr);
+  return r;
+}
+
+/** Manifest entries for untracked files, statuses "added" (numstat-derived). */
+async function untrackedManifestFiles(repo: string, paths: string[]): Promise<ManifestFile[]> {
+  return mapLimit(paths, UNTRACKED_CONCURRENCY, async (p) => {
+    const r = await untrackedDiff(repo, ["--numstat", "-z"], p);
+    const ns = parseNumstat(r.stdout)[0];
+    const additions = ns?.additions ?? 0;
+    return {
+      path: p,
+      status: "added" as const,
+      additions,
+      deletions: 0,
+      binary: ns?.binary ?? false,
+      large: additions > LARGE_FILE_LINES,
+      untracked: true,
+    };
+  });
+}
+
 export async function computeManifest(
   repo: string,
   range: ResolvedRange,
@@ -198,6 +263,13 @@ export async function computeManifest(
     }
     return file;
   });
+
+  // The working diff must also surface files git doesn't track yet.
+  if (range.spec === "working") {
+    const known = new Set(files.map((f) => f.path));
+    const untracked = (await listUntrackedFiles(repo)).filter((p) => !known.has(p));
+    files.push(...(await untrackedManifestFiles(repo, untracked)));
+  }
 
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 
@@ -296,14 +368,16 @@ export async function computeFileDiff(
 
   const pathspecs = file.old_path ? [file.old_path, file.path] : [file.path];
   const context = opts.context ?? 3;
-  const r = await git(repo, [
-    "diff",
-    ...DIFF_FLAGS,
-    `--unified=${context}`,
-    ...range.diffArgs,
-    "--",
-    ...pathspecs,
-  ]);
+  const r = file.untracked
+    ? await untrackedDiff(repo, [`--unified=${context}`], file.path)
+    : await git(repo, [
+        "diff",
+        ...DIFF_FLAGS,
+        `--unified=${context}`,
+        ...range.diffArgs,
+        "--",
+        ...pathspecs,
+      ]);
   const parsed = parseUnifiedDiff(r.stdout);
   base.binary = base.binary || parsed.binary;
   base.hunks = parsed.hunks;
@@ -314,10 +388,24 @@ export async function computeFileDiff(
 // ---------------------------------------------------------------------------
 // Raw diff text (persisted per revision so history stays viewable)
 
-/** Full unified diff for the range, exactly as git prints it. */
+/**
+ * Full unified diff for the range, exactly as git prints it. For the working
+ * range, per-file `--no-index` sections for untracked files are appended (in
+ * `ls-files` order, so the text stays deterministic) — the raw text is the
+ * authoritative change detector and feeds historical per-file hunks, so
+ * untracked files must be present here too.
+ */
 export async function computeRawDiff(repo: string, range: ResolvedRange): Promise<string> {
   const r = await git(repo, ["diff", ...DIFF_FLAGS, "--unified=3", ...range.diffArgs, "--"]);
-  return r.stdout;
+  if (range.spec !== "working") return r.stdout;
+  const untracked = await listUntrackedFiles(repo);
+  if (untracked.length === 0) return r.stdout;
+  const sections = await mapLimit(
+    untracked,
+    UNTRACKED_CONCURRENCY,
+    async (p) => (await untrackedDiff(repo, ["--unified=3"], p)).stdout,
+  );
+  return r.stdout + sections.join("");
 }
 
 /**

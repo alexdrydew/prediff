@@ -5,6 +5,8 @@
  */
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { RepoWatcher } from "../src/server/watcher";
 import { cleanup, commitAll, initRepo, write } from "./helpers";
 
@@ -59,6 +61,40 @@ test("computeSignature changes on a working-tree edit, again on a repeat edit", 
   expect(committed).not.toBe(clean);
 });
 
+test("computeSignature tracks untracked files: create, edit, nested edit, delete", async () => {
+  const w = new RepoWatcher(repo, () => {});
+  const clean = await w.computeSignature();
+
+  // A brand-new untracked file changes the porcelain output.
+  await write(repo, "untracked.txt", "fresh\n");
+  const created = await w.computeSignature();
+  expect(created).not.toBe(clean);
+
+  // Editing it leaves porcelain identical; mtime/size must catch it.
+  await Bun.sleep(5);
+  await write(repo, "untracked.txt", "fresh edited\n");
+  const edited = await w.computeSignature();
+  expect(edited).not.toBe(created);
+
+  // A file inside an untracked directory: porcelain -uall lists it
+  // individually (plain porcelain shows only "?? dir/", whose stat doesn't
+  // change on an in-place edit of a contained file).
+  await write(repo, "untracked-dir/inner.txt", "a\n");
+  const nested = await w.computeSignature();
+  expect(nested).not.toBe(edited);
+  await Bun.sleep(5);
+  await write(repo, "untracked-dir/inner.txt", "b\n"); // same size, new mtime
+  const nestedEdited = await w.computeSignature();
+  expect(nestedEdited).not.toBe(nested);
+
+  // Deleting untracked files restores the clean signature shape.
+  await fs.rm(path.join(repo, "untracked.txt"));
+  await fs.rm(path.join(repo, "untracked-dir"), { recursive: true });
+  const deleted = await w.computeSignature();
+  expect(deleted).not.toBe(nestedEdited);
+  expect(deleted).toBe(clean);
+});
+
 test("watcher fires quickly on a file change (fs-event path) and stays quiet otherwise", async () => {
   let fired = 0;
   const w = new RepoWatcher(repo, () => fired++);
@@ -86,5 +122,26 @@ test("watcher fires quickly on a file change (fs-event path) and stays quiet oth
     expect(await waitFor(() => fired > before, 5_000)).toBeGreaterThan(-1);
   } finally {
     w.stop();
+  }
+}, 20_000);
+
+test("watcher fires when an untracked file appears, and again when it's edited", async () => {
+  let fired = 0;
+  const w = new RepoWatcher(repo, () => fired++);
+  w.start();
+  try {
+    await Bun.sleep(400); // baseline check
+    expect(fired).toBe(0);
+
+    await write(repo, "agent-created.txt", "brand new\n");
+    expect(await waitFor(() => fired > 0, 5_000)).toBeGreaterThan(-1);
+
+    const before = fired;
+    await Bun.sleep(5);
+    await write(repo, "agent-created.txt", "brand new, edited\n");
+    expect(await waitFor(() => fired > before, 5_000)).toBeGreaterThan(-1);
+  } finally {
+    w.stop();
+    await fs.rm(path.join(repo, "agent-created.txt"), { force: true });
   }
 }, 20_000);

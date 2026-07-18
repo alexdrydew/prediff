@@ -5,7 +5,9 @@
  *
  * Porcelain output alone misses repeat edits to an already-dirty file (the
  * "XY path" line doesn't change), so the signature also folds in mtime+size
- * of every dirty path.
+ * of every dirty path. Untracked files count as dirty: they're listed
+ * individually (--untracked-files=all) so creating, editing, or deleting one
+ * — even inside an untracked directory — changes the signature.
  *
  * The signature is the authoritative change detector; fs events only decide
  * WHEN to compute it. `fs.watch` on the repo root (recursive, which covers
@@ -76,7 +78,14 @@ export class RepoWatcher {
     const [status, head] = await Promise.all([
       // --no-optional-locks: never write .git/index from a background check
       // (avoids feeding our own fs events back into the watcher).
-      git(this.repo, ["--no-optional-locks", "status", "--porcelain", "-z"], { allowFail: true }),
+      // --untracked-files=all: list files inside untracked directories
+      // individually — plain porcelain collapses them to "?? dir/", whose
+      // stat doesn't change when a contained file is edited in place.
+      git(
+        this.repo,
+        ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "-z"],
+        { allowFail: true },
+      ),
       git(this.repo, ["rev-parse", "HEAD"], { allowFail: true }),
     ]);
     const stats = await this.statDirtyPaths(status.stdout);

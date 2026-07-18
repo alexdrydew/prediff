@@ -157,3 +157,51 @@ test("watcher detects an edit and bumps the revision over SSE", async () => {
   expect(event).not.toBeNull();
   expect(event!.revision).toBe(3);
 }, 30_000);
+
+test("watcher bumps the revision when an untracked file is created, and again on edit", async () => {
+  const res = await fetch(new URL("/events", opened.url));
+  expect(res.ok).toBe(true);
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+
+  const revisions: number[] = [];
+  const pump = (async () => {
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      buf += decoder.decode(value, { stream: true });
+      for (const m of buf.matchAll(/event: revision\ndata: (.*)\n/g)) {
+        const rev = (JSON.parse(m[1]!) as { revision: number }).revision;
+        if (!revisions.includes(rev)) revisions.push(rev);
+      }
+    }
+  })();
+  void pump;
+
+  const waitFor = async (n: number) => {
+    const t0 = Date.now();
+    while (revisions.length < n && Date.now() - t0 < 6_000) await Bun.sleep(50);
+    return revisions.length >= n;
+  };
+
+  await Bun.sleep(300); // let the SSE subscription settle
+
+  // A brand-new file, never `git add`ed — the agent-creates-a-file case.
+  await write(repo, "src/agent-new.ts", "export const created = true;\n");
+  expect(await waitFor(1)).toBe(true);
+  expect(revisions[0]).toBe(4);
+
+  const manifest = await http<{ files: { path: string; status: string }[] }>("/api/diff");
+  const file = manifest.files.find((f) => f.path === "src/agent-new.ts");
+  expect(file?.status).toBe("added");
+
+  // Editing the still-untracked file bumps again (mtime/size in signature,
+  // raw no-index section in the change detector).
+  await Bun.sleep(5);
+  await write(repo, "src/agent-new.ts", "export const created = true;\nexport const edited = 1;\n");
+  expect(await waitFor(2)).toBe(true);
+  expect(revisions[1]).toBe(5);
+
+  await reader.cancel().catch(() => {});
+}, 30_000);

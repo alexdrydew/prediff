@@ -41,6 +41,9 @@ export interface ManifestFile {
   large: boolean;
   old_mode?: string;
   new_mode?: string;
+  /** True for files not yet known to git (working range only): enumerated via
+   * `ls-files --others` and diffed against /dev/null. */
+  untracked?: boolean;
 }
 
 export interface DiffManifest {
