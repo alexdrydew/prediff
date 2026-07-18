@@ -9,11 +9,13 @@ import type {
   CommentTag,
   DiffManifest,
   FeedbackBatch,
+  FileContentResult,
   FileDiff,
   ManifestFile,
   MarkReadyResult,
   OpenResult,
   ReviewComment,
+  RevisionsResult,
   Session,
   Side,
   StatusResult,
@@ -410,7 +412,39 @@ export class Daemon {
 
     if (pathname === "/api/revisions") {
       const available = await this.revisions.list(this.session.session_id);
-      return json({ current: this.session.revision, available });
+      const revisions = (
+        await Promise.all(
+          available.map(async (n) => {
+            const snap = await this.revisions.load(this.session.session_id, n);
+            if (!snap) return null;
+            return {
+              revision: snap.revision,
+              created_at: snap.created_at,
+              files: snap.manifest.files.length,
+              additions: snap.manifest.additions,
+              deletions: snap.manifest.deletions,
+            };
+          }),
+        )
+      ).filter((r) => r !== null);
+      const result: RevisionsResult = { current: this.session.revision, available, revisions };
+      return json(result);
+    }
+
+    // Full file content for one side of the current revision — used by the
+    // UI's "Expand context" (spec §3.2). Current revision only.
+    if (pathname === "/api/file" && method === "GET") {
+      const filePath = url.searchParams.get("path");
+      if (!filePath) return json({ error: "missing ?path=" }, 400);
+      const side: Side = url.searchParams.get("side") === "old" ? "old" : "new";
+      const inManifest = this.manifest.files.some(
+        (f) => f.path === filePath || f.old_path === filePath,
+      );
+      if (!inManifest) return json({ error: `not in diff: ${filePath}` }, 404);
+      const lines = await sideContent(this.opts.repoRoot, this.range, side, filePath);
+      if (lines === null) return json({ error: `no ${side}-side content: ${filePath}` }, 404);
+      const result: FileContentResult = { path: filePath, side, lines };
+      return json(result);
     }
 
     if (pathname === "/api/diff") {
@@ -444,7 +478,9 @@ export class Daemon {
       return this.createComment(await readBody(req));
     }
 
-    const commentMatch = /^\/api\/comments\/([^/]+)(?:\/(resolve|reply|send))?$/.exec(pathname);
+    const commentMatch = /^\/api\/comments\/([^/]+)(?:\/(resolve|reply|send|reanchor))?$/.exec(
+      pathname,
+    );
     if (commentMatch) {
       const [, id = "", action] = commentMatch;
       if (method === "POST" && action === "resolve") {
@@ -454,6 +490,9 @@ export class Daemon {
         return this.replyComment(id, await readBody(req));
       }
       if (method === "POST" && action === "send") return this.sendComment(id);
+      if (method === "POST" && action === "reanchor") {
+        return this.reanchorComment(id, await readBody(req));
+      }
       if (method === "PATCH" && !action) return this.updateComment(id, await readBody(req));
       if (method === "DELETE" && !action) return this.deleteComment(id);
       if (method === "GET" && !action) {
@@ -656,6 +695,49 @@ export class Daemon {
         comment.state = state;
       }
     }
+    comment.updated_at = new Date().toISOString();
+    await this.store.save(this.session);
+    this.hub.broadcast("comment.updated", { comment });
+    return json(comment);
+  }
+
+  /**
+   * POST /api/comments/:id/reanchor — orphaned-comment triage (spec §6.4).
+   * Either `{ line, end_line?, side? }` (re-anchor manually to a picked line)
+   * or `{ file_note: true }` (convert to a file-level note: line 0, no anchor,
+   * so it survives every future revision untouched). Both land the comment
+   * back in `submitted`. Dismissing an orphan is a plain PATCH to `resolved`.
+   */
+  private async reanchorComment(id: string, body: JsonBody): Promise<Response> {
+    const comment = findComment(this.session, id);
+    if (!comment) return json({ error: "comment not found" }, 404);
+    if (comment.state !== "orphaned") {
+      return json({ error: `not orphaned (state: ${comment.state})` }, 400);
+    }
+
+    if (body["file_note"] === true) {
+      comment.line = 0;
+      comment.end_line = 0;
+      comment.anchor = { context_before: [], lines: [], context_after: [] };
+    } else {
+      const line = body["line"];
+      if (typeof line !== "number" || !Number.isInteger(line) || line < 1) {
+        return json({ error: "required: line (number ≥ 1) or file_note: true" }, 400);
+      }
+      const endLine = typeof body["end_line"] === "number" ? body["end_line"] : line;
+      if (endLine < line) return json({ error: "invalid line range" }, 400);
+      const side: Side = body["side"] === "old" ? "old" : "new";
+      const content = await sideContent(this.opts.repoRoot, this.range, side, comment.file);
+      if (content === null) {
+        return json({ error: `no ${side}-side content: ${comment.file}` }, 404);
+      }
+      comment.line = line;
+      comment.end_line = Math.min(endLine, content.length);
+      comment.side = side;
+      comment.anchor = buildAnchor(content, comment.line, comment.end_line);
+    }
+    comment.state = "submitted";
+    comment.revision = this.session.revision;
     comment.updated_at = new Date().toISOString();
     await this.store.save(this.session);
     this.hub.broadcast("comment.updated", { comment });

@@ -237,10 +237,28 @@ export interface SendFeedbackResult {
   comments: ReviewComment[];
 }
 
+/** Summary of one stored revision (for the session-history list, spec §9.2). */
+export interface RevisionInfo {
+  revision: number;
+  created_at: string;
+  files: number;
+  additions: number;
+  deletions: number;
+}
+
 export interface RevisionsResult {
   current: number;
   /** Revision numbers still on disk (bounded history, oldest pruned). */
   available: number[];
+  /** Per-revision summaries, ascending by revision number. */
+  revisions: RevisionInfo[];
+}
+
+/** GET /api/file — one side's full content, for "Expand context" (spec §3.2). */
+export interface FileContentResult {
+  path: string;
+  side: Side;
+  lines: string[];
 }
 
 export type WaitReason = "ready" | "feedback" | "timeout";
