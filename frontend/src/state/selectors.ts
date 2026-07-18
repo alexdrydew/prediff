@@ -4,7 +4,7 @@ import type { ManifestFile } from "../types";
 import { isExpanded, type AppState, type SyncStatus } from "./store";
 import { buildRows, type Row, type RowsInput } from "../lib/rows";
 import { matchesFilter, parseFilter } from "../lib/filter";
-import { outsideScope, scopeKeywords } from "../lib/scope";
+import { computeScopeFlags } from "../lib/scope";
 
 // ---------------------------------------------------------------------------
 // Row model
@@ -141,7 +141,8 @@ export interface TreeItem {
   commentCount: number;
   unresolvedCount: number;
   agentTouched: boolean;
-  outsideScope: boolean;
+  /** Why this file was flagged outside the stated scope, or null (tooltip). */
+  scopeFlag: string | null;
 }
 
 export interface TreeModel {
@@ -161,10 +162,15 @@ const treeMemo = memoOne(
     comments: AppState["comments"],
     agentTouched: ReadonlySet<string>,
     scope: string | null,
+    scopeFiles: readonly string[] | null,
     filterQuery: string,
   ): TreeModel => {
     const parsed = parseFilter(filterQuery);
-    const keywords = scopeKeywords(scope);
+    const scopeFlags = computeScopeFlags(
+      files.map((f) => f.path),
+      scope,
+      scopeFiles,
+    );
     const byFile = new Map<string, { total: number; unresolved: number }>();
     for (const c of comments) {
       const e = byFile.get(c.file) ?? { total: 0, unresolved: 0 };
@@ -183,7 +189,7 @@ const treeMemo = memoOne(
         commentCount: counts.total,
         unresolvedCount: counts.unresolved,
         agentTouched: agentTouched.has(file.path),
-        outsideScope: outsideScope(file.path, keywords),
+        scopeFlag: scopeFlags.get(file.path) ?? null,
       };
       if (
         !matchesFilter(
@@ -217,6 +223,7 @@ export function selectTree(state: AppState): TreeModel {
     state.comments,
     state.agentTouched,
     state.session?.scope ?? null,
+    state.session?.scope_files ?? null,
     state.filterQuery,
   );
 }

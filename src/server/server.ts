@@ -208,7 +208,11 @@ export class Daemon {
   // Session / diff lifecycle
 
   /** Create or reuse the current session for `rangeSpec`, then refresh. */
-  private async openSession(rangeSpec: string, scope: string | null): Promise<void> {
+  private async openSession(
+    rangeSpec: string,
+    scope: string | null,
+    scopeFiles: string[] | null = null,
+  ): Promise<void> {
     // Capture the change signature BEFORE computing the manifest: anything
     // that changes afterwards is guaranteed to produce a mismatch later.
     const signature = await this.watcher.computeSignature();
@@ -216,12 +220,9 @@ export class Daemon {
     const existing = await this.store.loadCurrent();
     if (existing && existing.range === rangeSpec) {
       this.session = existing;
-      if (scope !== null && scope !== this.session.scope) {
-        this.session.scope = scope;
-        await this.store.save(this.session);
-      }
+      if (this.applyScope(scope, scopeFiles)) await this.store.save(this.session);
     } else {
-      this.session = await this.store.create(this.opts.repoRoot, rangeSpec, scope);
+      this.session = await this.store.create(this.opts.repoRoot, rangeSpec, scope, scopeFiles);
       this.hub.broadcast("session.changed", { session_id: this.session.session_id });
     }
     this.stats.manifest_computes++;
@@ -232,6 +233,24 @@ export class Daemon {
     this.manifestSignature = signature;
     this.fileDiffCache.clear();
     await this.persistRevision();
+  }
+
+  /** Apply new scope/scope-files values (null = leave unchanged). Returns
+   * whether anything changed; the caller persists. */
+  private applyScope(scope: string | null, scopeFiles: string[] | null): boolean {
+    let changed = false;
+    if (scope !== null && scope !== this.session.scope) {
+      this.session.scope = scope;
+      changed = true;
+    }
+    if (
+      scopeFiles !== null &&
+      JSON.stringify(scopeFiles) !== JSON.stringify(this.session.scope_files)
+    ) {
+      this.session.scope_files = scopeFiles;
+      changed = true;
+    }
+    return changed;
   }
 
   /**
@@ -402,11 +421,15 @@ export class Daemon {
       const body = await readBody(req);
       const range = typeof body["range"] === "string" ? body["range"] : this.session.range;
       const scope = typeof body["scope"] === "string" ? body["scope"] : null;
+      const rawScopeFiles = body["scope_files"];
+      const scopeFiles =
+        Array.isArray(rawScopeFiles) && rawScopeFiles.every((p) => typeof p === "string")
+          ? (rawScopeFiles as string[])
+          : null;
       if (range !== this.session.range) {
-        await this.openSession(range, scope);
+        await this.openSession(range, scope, scopeFiles);
       } else {
-        if (scope !== null && scope !== this.session.scope) {
-          this.session.scope = scope;
+        if (this.applyScope(scope, scopeFiles)) {
           await this.store.save(this.session);
           this.hub.broadcast("session.changed", { session_id: this.session.session_id });
         }
@@ -631,6 +654,7 @@ export class Daemon {
       revision: this.session.revision,
       url: this.url,
       scope: this.session.scope,
+      scope_files: this.session.scope_files,
       comments: commentCounts(this.session),
       viewed_files: this.session.viewed_files.length,
     };

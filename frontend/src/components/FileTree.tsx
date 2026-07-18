@@ -67,8 +67,8 @@ const FileItem = memo(function FileItem({
       <span className="sb-name">
         <span>{item.file.path}</span>
       </span>
-      {item.outsideScope && (
-        <span className="sb-scope" title="Outside the agent's stated scope (informational)">
+      {item.scopeFlag !== null && (
+        <span className="sb-scope" title={item.scopeFlag}>
           ⚠
         </span>
       )}

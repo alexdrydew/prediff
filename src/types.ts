@@ -163,6 +163,13 @@ export interface Session {
   session_state: SessionState;
   /** Agent's stated task scope, from `prediff open --scope` (spec §9.4). */
   scope: string | null;
+  /**
+   * Explicit in-scope file patterns (globs), from `prediff open
+   * --scope-files`. When present (non-null), the UI flags files matching no
+   * pattern and skips the keyword heuristic entirely. Additive field —
+   * absent/null on older sessions.
+   */
+  scope_files: string[] | null;
   /** Per-file "viewed" checkboxes; a file resets when its diff changes. */
   viewed_files: string[];
   comments: ReviewComment[];
@@ -223,6 +230,7 @@ export interface StatusResult {
   revision: number;
   url: string;
   scope: string | null;
+  scope_files: string[] | null;
   comments: CommentCounts;
   /** Number of files currently marked viewed. */
   viewed_files: number;

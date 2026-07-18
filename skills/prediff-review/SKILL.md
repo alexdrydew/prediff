@@ -27,7 +27,11 @@ prediff open working --scope "<the task you were asked to do>" --json
 Ranges: `working` (everything vs HEAD — the usual choice), `staged`, `HEAD`
 (last commit), or any `A..B`. `--scope` is a one-line statement of your task
 ("fix the login redirect bug") — the UI uses it to flag files you touched
-outside the stated scope, so always pass it. Output:
+outside the stated scope, so always pass it. If you know exactly which files
+your task covers, pass `--scope-files "src/lib/**,src/routes/users.ts"`
+(comma-separated globs) instead of relying on the keyword heuristic: files
+matching no pattern get the out-of-scope flag, everything else doesn't.
+Output:
 
 ```json
 {"session_id": "…", "url": "http://localhost:4966", "files": 12, "additions": 340, "deletions": 61, "revision": 1, "session_state": "reviewing"}

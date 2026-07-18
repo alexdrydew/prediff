@@ -87,6 +87,7 @@ export interface SessionMeta {
   revision: number;
   session_state: SessionState;
   scope: string | null;
+  scope_files: string[] | null;
 }
 
 export interface AppState {
@@ -293,6 +294,7 @@ export async function loadServerState(): Promise<void> {
         revision: session.revision,
         session_state: session.session_state,
         scope: session.scope,
+        scope_files: session.scope_files ?? null,
       },
       viewingRevision: viewing,
       pendingRevision: pending,
@@ -401,6 +403,7 @@ export async function applyRevision(revision: number | null): Promise<void> {
         revision: session.revision,
         session_state: session.session_state,
         scope: session.scope,
+        scope_files: session.scope_files ?? null,
       },
       agentTouched:
         target === null && previousManifest !== null

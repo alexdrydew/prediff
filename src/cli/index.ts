@@ -57,7 +57,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   return { command, positional, flags };
 }
 
-const FLAGS_WITH_VALUE = new Set(["timeout", "reply", "ttl", "scope", "state"]);
+const FLAGS_WITH_VALUE = new Set(["timeout", "reply", "ttl", "scope", "scope-files", "state"]);
 
 function out(json: boolean, value: unknown, human: (v: never) => string): void {
   if (json) {
@@ -82,6 +82,19 @@ async function cmdOpen(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
   const range = args.positional[0] ?? "working";
   const scopeFlag = args.flags.get("scope");
+  const scopeFilesFlag = args.flags.get("scope-files");
+  if (scopeFilesFlag === true) {
+    throw new CliError('--scope-files requires a value (comma-separated globs, e.g. "src/lib/**,src/routes/users.ts")');
+  }
+  // Comma-separated glob patterns; stored on the session. When present the
+  // UI flags exactly the files matching no pattern (heuristic disabled).
+  const scopeFiles =
+    typeof scopeFilesFlag === "string"
+      ? scopeFilesFlag
+          .split(",")
+          .map((p) => p.trim())
+          .filter((p) => p !== "")
+      : null;
   const root = await requireRepoRoot();
   const ttlFlag = args.flags.get("ttl");
   const lock = await ensureDaemon(root, {
@@ -93,6 +106,7 @@ async function cmdOpen(args: ParsedArgs): Promise<number> {
     body: JSON.stringify({
       range,
       ...(typeof scopeFlag === "string" ? { scope: scopeFlag } : {}),
+      ...(scopeFiles !== null ? { scope_files: scopeFiles } : {}),
     }),
   });
   out(json, result, (r: OpenResult) =>
@@ -117,6 +131,9 @@ async function cmdStatus(args: ParsedArgs): Promise<number> {
       `session ${s.session_id}  range=${s.range}  revision=${s.revision}  state=${s.session_state}`,
       `  ${s.url}`,
       ...(s.scope ? [`  scope: ${s.scope}`] : []),
+      ...(s.scope_files && s.scope_files.length > 0
+        ? [`  scope files: ${s.scope_files.join(", ")}`]
+        : []),
       `  comments: ${s.comments.total} total — ${s.comments.draft} draft, ` +
         `${s.comments.submitted} submitted, ${s.comments.addressed} addressed, ` +
         `${s.comments.resolved} resolved, ${s.comments.orphaned} orphaned`,
@@ -243,6 +260,9 @@ function cmdHelp(): number {
       "  open [range]              start/reuse daemon, open a review session",
       "                            range: working (default) | staged | HEAD | A..B | <commit-ish>",
       "                            flags: --json --ttl <s> --scope <task> --no-browser",
+      "                                   --scope-files <globs>  (comma-separated, e.g.",
+      "                                   \"src/lib/**,src/routes/users.ts\" — files matching",
+      "                                   no pattern are flagged out-of-scope in the UI)",
       "  status                    session snapshot: state, revision, comment counts",
       "  comments [--state <s>]    list comments (drafts always excluded)",
       "           [--unresolved]   s: submitted | addressed | resolved | orphaned",

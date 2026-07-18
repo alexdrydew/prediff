@@ -57,7 +57,12 @@ export class SessionStore {
     await writeJsonAtomic(currentSessionPath(this.stateDir), { session_id: sessionId });
   }
 
-  async create(repoRoot: string, range: string, scope: string | null = null): Promise<Session> {
+  async create(
+    repoRoot: string,
+    range: string,
+    scope: string | null = null,
+    scopeFiles: string[] | null = null,
+  ): Promise<Session> {
     const now = new Date().toISOString();
     const session: Session = {
       schema_version: SCHEMA_VERSION,
@@ -67,6 +72,7 @@ export class SessionStore {
       revision: 1,
       session_state: "reviewing",
       scope,
+      scope_files: scopeFiles,
       viewed_files: [],
       comments: [],
       feedback_batches: [],
@@ -89,7 +95,12 @@ const V1_COMMENT_STATE: Record<string, ReviewComment["state"]> = {
 };
 
 export function migrateSession(raw: Record<string, unknown>): Session {
-  if (raw["schema_version"] === SCHEMA_VERSION) return raw as unknown as Session;
+  if (raw["schema_version"] === SCHEMA_VERSION) {
+    const session = raw as unknown as Session;
+    // Additive v2 field: sessions written before scope_files existed.
+    session.scope_files = normalizeScopeFiles(raw["scope_files"]);
+    return session;
+  }
 
   const now = new Date().toISOString();
   const v1State = raw["review_state"];
@@ -102,6 +113,7 @@ export function migrateSession(raw: Record<string, unknown>): Session {
     revision: typeof raw["generation"] === "number" ? raw["generation"] : 1,
     session_state: v1State === "submitted" ? "ready" : "reviewing",
     scope: typeof raw["scope"] === "string" ? raw["scope"] : null,
+    scope_files: normalizeScopeFiles(raw["scope_files"]),
     viewed_files: Array.isArray(raw["viewed_files"]) ? (raw["viewed_files"] as string[]) : [],
     comments: comments.map(migrateComment),
     feedback_batches: [],
@@ -110,6 +122,12 @@ export function migrateSession(raw: Record<string, unknown>): Session {
   };
   if (typeof raw["submitted_at"] === "string") session.ready_at = raw["submitted_at"];
   return session;
+}
+
+function normalizeScopeFiles(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((p) => typeof p === "string")
+    ? (value as string[])
+    : null;
 }
 
 function migrateComment(raw: Record<string, unknown>): ReviewComment {
