@@ -1186,14 +1186,18 @@ textarea:focus {
   background: var(--bg-surface-raised);
   border-top: 1px solid var(--border-default);
   border-bottom: 1px solid var(--border-default);
-  max-width: 860px;
   font-family: var(--font-ui);
+}
+
+.cmt-wrap .cmt {
+  max-width: 900px; /* readability cap; the card itself spans the panel */
 }
 
 .cmt-wrap.state-draft {
   border: 1px dashed var(--border-default);
   border-left: 3px solid var(--text-tertiary);
   margin: 6px 20px;
+  max-width: 860px;
   border-radius: var(--radius-md);
 }
 
