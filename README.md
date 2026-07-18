@@ -56,6 +56,23 @@ bun src/cli/index.ts stop
 Ranges: `working` (default; staged+unstaged vs HEAD), `staged`, `HEAD`
 (last commit), any commit-ish, or `A..B` / `A...B`.
 
+### Nix
+
+With flakes enabled, no clone or `bun install` needed:
+
+```sh
+# run directly
+nix run github:alexdrydew/prediff -- open working
+
+# install into your profile
+nix profile install github:alexdrydew/prediff
+prediff open working
+```
+
+Or add `github:alexdrydew/prediff` as a flake input and use
+`packages.<system>.default`. A dev shell with bun is available via
+`nix develop`.
+
 ## Development
 
 ```sh
