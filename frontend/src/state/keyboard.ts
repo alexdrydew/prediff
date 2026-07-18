@@ -16,7 +16,8 @@ import {
   toggleViewed,
 } from "./store";
 import { selectRows } from "./selectors";
-import { currentTopIndex, focusFilter, scrollToRow } from "./controller";
+import { currentFocusIndex, focusFilter, noteKeyboardFocus, scrollToRow } from "./controller";
+import { findRowIndex } from "../lib/focus";
 import type { Row } from "../lib/rows";
 
 function isEditable(target: EventTarget | null): boolean {
@@ -25,28 +26,22 @@ function isEditable(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
-function findRow(
-  rows: Row[],
-  from: number,
-  dir: 1 | -1,
-  match: (row: Row) => boolean,
-): number {
-  for (let i = from + dir; i >= 0 && i < rows.length; i += dir) {
-    if (match(rows[i]!)) return i;
-  }
-  return -1;
-}
-
+/** Jump relative to the current focus anchor (mouse-synced, QA F4) — never
+ * from a possibly-stale viewport read — and move the anchor to the target. */
 function jump(dir: 1 | -1, match: (row: Row) => boolean, align: "start" | "center" = "start"): void {
   const rows = selectRows(store.getState());
-  const index = findRow(rows, currentTopIndex(), dir, match);
-  if (index !== -1) scrollToRow(index, align);
+  const index = findRowIndex(rows, currentFocusIndex(), dir, match);
+  if (index !== -1) {
+    noteKeyboardFocus(rows[index]!.key);
+    scrollToRow(index, align);
+  }
 }
 
-/** Comment on the hunk currently at the top of the viewport (spec §8 `c`). */
+/** Comment on the currently-focused row (spec §8 `c`): the anchor set by the
+ * last keyboard jump / mouse interaction, falling back to the viewport top. */
 function commentCurrent(): void {
   const rows = selectRows(store.getState());
-  const top = currentTopIndex();
+  const top = currentFocusIndex();
   // Find the first code line at/after the current row (skipping backwards to
   // the hunk if we're on a header).
   for (let i = Math.max(0, top); i < rows.length; i++) {

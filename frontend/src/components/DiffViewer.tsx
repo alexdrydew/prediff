@@ -11,7 +11,7 @@ import { memo, useCallback, useEffect, useRef } from "react";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { selectRows } from "../state/selectors";
 import { setActiveContext, store, useStore } from "../state/store";
-import { registerDiffController } from "../state/controller";
+import { noteRowInteraction, noteScroll, registerDiffController } from "../state/controller";
 import { estimateRowHeight, isDynamicRow, type Row } from "../lib/rows";
 import { languageForPath } from "../lib/language";
 import { FileHeaderRow } from "./rows/FileHeaderRow";
@@ -132,6 +132,9 @@ export function DiffViewer(): ReactElement {
     if (!el) return;
     let raf = 0;
     const onScroll = (): void => {
+      // User scrolls release the keyboard-focus anchor (programmatic scrolls
+      // are filtered out inside noteScroll) — nav follows the viewport again.
+      noteScroll();
       if (raf === 0) {
         raf = requestAnimationFrame(() => {
           raf = 0;
@@ -139,9 +142,21 @@ export function DiffViewer(): ReactElement {
         });
       }
     };
+    // Any mouse interaction with a diff row or comment card re-syncs the
+    // keyboard-focus anchor to that row (QA F4): n/p/c act from where the
+    // user actually is, not from a stale viewport/nav position.
+    const onMouseDown = (e: MouseEvent): void => {
+      const target = e.target instanceof Element ? e.target : null;
+      const vrow = target?.closest<HTMLElement>(".vrow") ?? null;
+      const index = vrow ? Number(vrow.dataset["index"]) : NaN;
+      const row = Number.isInteger(index) ? rowsRef.current[index] : undefined;
+      if (row) noteRowInteraction(row.key);
+    };
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("mousedown", onMouseDown);
     return () => {
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("mousedown", onMouseDown);
       if (raf !== 0) cancelAnimationFrame(raf);
     };
   }, [updateContext]);
