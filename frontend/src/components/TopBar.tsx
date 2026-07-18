@@ -9,6 +9,7 @@ import {
 import {
   clearSyncError,
   loadServerState,
+  openPanel,
   setPanel,
   setTheme,
   setViewMode,
@@ -184,7 +185,7 @@ export function TopBar(): ReactElement {
             ? "Session already marked ready"
             : "Signal you're satisfied — pushing happens outside prediff"
         }
-        onClick={() => setPanel("ready")}
+        onClick={() => openPanel("ready")}
       >
         Mark Ready
       </button>
@@ -196,7 +197,7 @@ export function TopBar(): ReactElement {
             ? "No draft comments to send"
             : `Send ${drafts} draft comment${drafts === 1 ? "" : "s"} to the agent`
         }
-        onClick={() => setPanel("send")}
+        onClick={() => openPanel("send")}
       >
         Send Feedback{drafts > 0 ? ` (${drafts})` : ""}
       </button>

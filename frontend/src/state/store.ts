@@ -656,6 +656,18 @@ export function setPanel(panel: Panel): void {
   if (panel === "history") void loadRevisionList();
 }
 
+/**
+ * Open a panel unconditionally (idempotent — never toggles closed). Action
+ * buttons like "Mark Ready" / "Send Feedback" use this instead of the
+ * toggling setPanel: a duplicated or replayed click event must not silently
+ * cancel the open (QA F3 — first click after a fresh page load appearing
+ * "swallowed"). The open must not depend on any prior UI/focus state.
+ */
+export function openPanel(panel: Exclude<Panel, "none">): void {
+  setState({ panel });
+  if (panel === "history") void loadRevisionList();
+}
+
 export function closePanel(): void {
   setState({ panel: "none" });
 }
