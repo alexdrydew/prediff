@@ -662,6 +662,37 @@ textarea:focus {
   color: var(--text-tertiary);
 }
 
+/* directory rows (QA gap §1.6) */
+.sb-dir {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 14px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sb-dir:hover {
+  background: var(--bg-surface-hover);
+}
+
+.sb-dir .twisty {
+  color: var(--text-tertiary);
+  width: 1em;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+
+.sb-dir-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ═══ Main column ═══ */
 
 .mn {

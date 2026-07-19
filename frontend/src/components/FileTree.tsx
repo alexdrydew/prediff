@@ -6,6 +6,7 @@ import {
   markCollapsedViewed,
   setFilterQuery,
   setTreeWidth,
+  toggleDir,
   toggleFile,
   toggleViewed,
   useStore,
@@ -23,14 +24,22 @@ const STATUS_IC: Record<FileStatus, { ch: string; cls: string }> = {
   unmerged: { ch: "U", cls: "d" },
 };
 
+/** Indent per nesting level, on the token spacing scale (--space-3). */
+const INDENT_PX = 12;
+
 const FileItem = memo(function FileItem({
   item,
   active,
   dim,
+  name,
+  depth = 0,
 }: {
   item: TreeItem;
   active: boolean;
   dim: boolean;
+  /** Display name: basename inside the tree, full path in flat lists. */
+  name?: string;
+  depth?: number;
 }): ReactElement {
   const ic = STATUS_IC[item.file.status];
   const ref = useRef<HTMLDivElement>(null);
@@ -46,6 +55,7 @@ const FileItem = memo(function FileItem({
       className={`sb-item${active ? " active" : ""}${dim ? " dim" : ""}`}
       role="button"
       tabIndex={0}
+      style={depth > 0 ? { paddingLeft: 14 + depth * INDENT_PX } : undefined}
       onClick={() => {
         if (!item.expanded) toggleFile(item.file.path);
         scrollToPath(item.file.path);
@@ -66,7 +76,7 @@ const FileItem = memo(function FileItem({
       />
       <span className={`sb-ic ${ic.cls}`}>{ic.ch}</span>
       <span className="sb-name">
-        <span>{item.file.path}</span>
+        <span>{name ?? item.file.path}</span>
       </span>
       {item.scopeFlag !== null && (
         <span className="sb-scope" title={item.scopeFlag}>
@@ -206,15 +216,35 @@ export function FileTree(): ReactElement {
       </div>
       <div className="sb-list">
         <div className="sb-label">Changed files</div>
-        {tree.active.map((item) => (
-          <FileItem
-            key={item.file.path}
-            item={item}
-            active={item.file.path === activePath}
-            dim={false}
-          />
-        ))}
-        {tree.active.length === 0 && <div className="sb-empty">No files match the filter.</div>}
+        {tree.rows.map((row) =>
+          row.type === "dir" ? (
+            <div
+              key={`d:${row.path}`}
+              className="sb-dir"
+              role="button"
+              tabIndex={0}
+              style={row.depth > 0 ? { paddingLeft: 14 + row.depth * INDENT_PX } : undefined}
+              title={row.path}
+              onClick={() => toggleDir(row.path)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") toggleDir(row.path);
+              }}
+            >
+              <span className="twisty">{row.collapsed ? "▸" : "▾"}</span>
+              <span className="sb-dir-name">{row.name}/</span>
+            </div>
+          ) : (
+            <FileItem
+              key={row.item.file.path}
+              item={row.item}
+              active={row.item.file.path === activePath}
+              dim={false}
+              name={row.name}
+              depth={row.depth}
+            />
+          ),
+        )}
+        {tree.rows.length === 0 && <div className="sb-empty">No files match the filter.</div>}
         {tree.collapsed.length > 0 && (
           <>
             <div className="sb-label">

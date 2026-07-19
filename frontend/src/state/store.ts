@@ -170,6 +170,8 @@ export interface AppState {
   treeWidth: number;
   kbarDismissed: boolean;
   filterQuery: string;
+  /** Sidebar directories the user collapsed (QA gap §1.6); default expanded. */
+  collapsedDirs: ReadonlySet<string>;
 
   /** Explicit user collapse/expand choices; wins over default collapse rules. */
   collapsedOverride: Readonly<Record<string, boolean>>;
@@ -235,6 +237,7 @@ export const store = createStore<AppState>(() => ({
   treeWidth: readPref<number>("treeWidth", 280),
   kbarDismissed: readPref<boolean>("kbarDismissed", false),
   filterQuery: "",
+  collapsedDirs: new Set<string>(),
 
   collapsedOverride: {},
   autoCollapsed: new Set<string>(),
@@ -886,6 +889,16 @@ export function setTreeWidth(width: number): void {
 
 export function setFilterQuery(filterQuery: string): void {
   setState({ filterQuery });
+}
+
+/** Collapse/expand a sidebar directory (QA gap §1.6). */
+export function toggleDir(path: string): void {
+  setState((s) => {
+    const collapsedDirs = new Set(s.collapsedDirs);
+    if (collapsedDirs.has(path)) collapsedDirs.delete(path);
+    else collapsedDirs.add(path);
+    return { collapsedDirs };
+  });
 }
 
 export function dismissKbar(): void {

@@ -10,6 +10,7 @@ import {
 } from "./store";
 import { buildRows, type Row, type RowsInput } from "../lib/rows";
 import { matchesFilter, parseFilter } from "../lib/filter";
+import { sidebarRows, sortByTreeOrder, type SidebarRow } from "../lib/tree";
 
 // ---------------------------------------------------------------------------
 // Row model
@@ -78,11 +79,21 @@ const rowsInputMemo = memoOne(
   }),
 );
 
+/** Manifest files in flattened directory-tree order (QA gap §1.6): the diff
+ * panel renders in this order, so n/p navigation follows the tree. */
+const treeOrderedFilesMemo = memoOne((files: readonly ManifestFile[]): ManifestFile[] =>
+  sortByTreeOrder(files),
+);
+
+export function selectOrderedFiles(state: AppState): readonly ManifestFile[] {
+  return treeOrderedFilesMemo(state.manifest?.files ?? EMPTY_FILES);
+}
+
 export function selectRows(state: AppState): Row[] {
   if (state.interdiff !== null) return selectInterdiffRows(state);
   if (!state.manifest) return EMPTY_ROWS;
   const input = rowsInputMemo(
-    state.manifest.files,
+    selectOrderedFiles(state),
     selectExpanded(state),
     state.viewedFiles,
     state.fileDiffs,
@@ -231,6 +242,8 @@ export function selectSyncStatus(state: AppState): SyncStatus {
 // File tree
 
 export interface TreeItem {
+  /** file.path, hoisted for the directory-tree grouping (§1.6). */
+  path: string;
   file: ManifestFile;
   viewed: boolean;
   expanded: boolean;
@@ -242,8 +255,9 @@ export interface TreeItem {
 }
 
 export interface TreeModel {
-  /** Ordinary, reviewable files (expanded by default). */
-  active: TreeItem[];
+  /** Sidebar rows for ordinary files: directory tree, or a flat list while
+   * the filter is active (QA gap §1.6). */
+  rows: SidebarRow<TreeItem>[];
   /** Auto-collapsed files (generated / deleted / oversized) — §7.1. */
   collapsed: TreeItem[];
   totalFiles: number;
@@ -258,8 +272,10 @@ const treeMemo = memoOne(
     comments: AppState["comments"],
     agentTouched: ReadonlySet<string>,
     filterQuery: string,
+    collapsedDirs: ReadonlySet<string>,
   ): TreeModel => {
     const parsed = parseFilter(filterQuery);
+    const filterActive = filterQuery.trim() !== "";
     const byFile = new Map<string, { total: number; unresolved: number }>();
     for (const c of comments) {
       if (c.file === null) continue; // review-level: not attached to any file
@@ -273,6 +289,7 @@ const treeMemo = memoOne(
     for (const file of files) {
       const counts = byFile.get(file.path) ?? { total: 0, unresolved: 0 };
       const item: TreeItem = {
+        path: file.path,
         file,
         viewed: viewedFiles.has(file.path),
         expanded: expanded.has(file.path),
@@ -298,7 +315,8 @@ const treeMemo = memoOne(
       (item.expanded ? active : collapsed).push(item);
     }
     return {
-      active,
+      // Group into a directory tree; the filter flattens to full paths.
+      rows: sidebarRows(active, collapsedDirs, filterActive),
       collapsed,
       totalFiles: files.length,
       viewedFiles: files.filter((f) => viewedFiles.has(f.path)).length,
@@ -308,12 +326,13 @@ const treeMemo = memoOne(
 
 export function selectTree(state: AppState): TreeModel {
   return treeMemo(
-    state.manifest?.files ?? EMPTY_FILES,
+    selectOrderedFiles(state),
     state.viewedFiles,
     selectExpanded(state),
     state.comments,
     state.agentTouched,
     state.filterQuery,
+    state.collapsedDirs,
   );
 }
 
