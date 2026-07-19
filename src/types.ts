@@ -44,6 +44,12 @@ export interface ManifestFile {
   /** True for files not yet known to git (working range only): enumerated via
    * `ls-files --others` and diffed against /dev/null. */
   untracked?: boolean;
+  /**
+   * Out-of-scope flag, computed server-side from the session's scope /
+   * scope_files (content-aware heuristic, QA gap §1.2). Present only on
+   * flagged files; strictly informational.
+   */
+  scope_flag?: { flagged: boolean; reason: string } | null;
 }
 
 export interface DiffManifest {

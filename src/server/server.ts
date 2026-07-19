@@ -41,6 +41,7 @@ import {
   type ResolvedRange,
 } from "../git/diff";
 import { anchorWindowIntact, buildAnchor, reanchorOutcome } from "../store/anchor";
+import { changedLinesText, computeScopeFlags } from "../scope";
 import {
   SessionStore,
   addComment,
@@ -239,8 +240,31 @@ export class Daemon {
       computeRawDiff(this.opts.repoRoot, this.range),
     ]);
     this.manifestSignature = signature;
+    this.applyScopeFlags();
     this.fileDiffCache.clear();
     await this.persistRevision();
+  }
+
+  /**
+   * Annotate the current manifest with out-of-scope flags (QA §1.2). Runs
+   * server-side because the heuristic is content-aware: it needs each file's
+   * diff text, which the client doesn't have for collapsed files.
+   */
+  private applyScopeFlags(): void {
+    const sections = splitFileSections(this.rawDiff);
+    const flags = computeScopeFlags(
+      this.manifest.files.map((f) => ({
+        path: f.path,
+        diff_text: changedLinesText(sections.get(f.path)),
+      })),
+      this.session.scope,
+      this.session.scope_files,
+    );
+    for (const f of this.manifest.files) {
+      const reason = flags.get(f.path);
+      if (reason !== undefined) f.scope_flag = { flagged: true, reason };
+      else delete f.scope_flag;
+    }
   }
 
   /** Apply new scope/scope-files values (null = leave unchanged). Returns
@@ -338,6 +362,7 @@ export class Daemon {
     next.revision = this.session.revision;
     this.manifest = next;
     this.rawDiff = raw;
+    this.applyScopeFlags();
     this.fileDiffCache.clear();
     await this.persistRevision();
 
@@ -477,6 +502,7 @@ export class Daemon {
         await this.openSession(range, scope, scopeFiles);
       } else {
         if (this.applyScope(scope, scopeFiles)) {
+          this.applyScopeFlags(); // flags depend on the (changed) scope
           await this.store.save(this.session);
           this.hub.broadcast("session.changed", { session_id: this.session.session_id });
         }

@@ -4,7 +4,6 @@ import type { ManifestFile } from "../types";
 import { isExpanded, type AppState, type SyncStatus } from "./store";
 import { buildRows, type Row, type RowsInput } from "../lib/rows";
 import { matchesFilter, parseFilter } from "../lib/filter";
-import { computeScopeFlags } from "../lib/scope";
 
 // ---------------------------------------------------------------------------
 // Row model
@@ -161,16 +160,9 @@ const treeMemo = memoOne(
     expanded: ReadonlySet<string>,
     comments: AppState["comments"],
     agentTouched: ReadonlySet<string>,
-    scope: string | null,
-    scopeFiles: readonly string[] | null,
     filterQuery: string,
   ): TreeModel => {
     const parsed = parseFilter(filterQuery);
-    const scopeFlags = computeScopeFlags(
-      files.map((f) => f.path),
-      scope,
-      scopeFiles,
-    );
     const byFile = new Map<string, { total: number; unresolved: number }>();
     for (const c of comments) {
       const e = byFile.get(c.file) ?? { total: 0, unresolved: 0 };
@@ -189,7 +181,8 @@ const treeMemo = memoOne(
         commentCount: counts.total,
         unresolvedCount: counts.unresolved,
         agentTouched: agentTouched.has(file.path),
-        scopeFlag: scopeFlags.get(file.path) ?? null,
+        // Server-computed (content-aware heuristic, QA §1.2) — read, not derived.
+        scopeFlag: file.scope_flag?.reason ?? null,
       };
       if (
         !matchesFilter(
@@ -222,8 +215,6 @@ export function selectTree(state: AppState): TreeModel {
     selectExpanded(state),
     state.comments,
     state.agentTouched,
-    state.session?.scope ?? null,
-    state.session?.scope_files ?? null,
     state.filterQuery,
   );
 }
