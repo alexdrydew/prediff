@@ -1,11 +1,34 @@
 {
   "name": "prediff",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Fast local agent-first diff review tool",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "prediff": "src/cli/index.ts"
   },
+  "files": [
+    "src",
+    "public"
+  ],
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexdrydew/prediff.git"
+  },
+  "homepage": "https://github.com/alexdrydew/prediff#readme",
+  "bugs": {
+    "url": "https://github.com/alexdrydew/prediff/issues"
+  },
+  "keywords": [
+    "diff",
+    "code-review",
+    "git",
+    "agent",
+    "cli"
+  ],
   "scripts": {
     "start": "bun src/cli/index.ts",
     "test": "bun test",
