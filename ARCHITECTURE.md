@@ -53,7 +53,8 @@ needed, open browser.
 |---|---|
 | `prediff open [range] --json` | Ensure daemon running, create (or refresh) a review session for the given diff range (`HEAD`, `working`, `staged`, `A..B`). Prints `{session_id, url, files, additions, deletions}`. |
 | `prediff status --json` | Session snapshot: review state (`reviewing` / `submitted`), comment counts, diff generation number. |
-| `prediff comments --json [--unresolved]` | All comments with file/line/side/text/state. |
+| `prediff comments --json [--unresolved]` | All comments with kind/file/line/side/text/state (drafts always excluded). |
+| `prediff suggestion <id> --json` | A comment's reviewer-authored replacement text: `{file, line, end_line, side, current_lines, suggestion}` — `current_lines` lets the agent verify the region is unchanged before applying verbatim. |
 | `prediff wait --timeout <s> --json` | Bounded long-poll: returns on review submit, new comment, or timeout — whichever first. Timeout is **safe**: state is on disk, call again. Exit code distinguishes `submitted` / `new-comments` / `timeout`. |
 | `prediff resolve <comment-id> [--reply <text>] --json` | Mark a comment addressed (with optional agent reply, shown in UI). |
 | `prediff refresh --json` | Recompute the diff (after the agent edited files); bumps generation, notifies UI via SSE. (Server also auto-watches the repo; this is the explicit hook.) |
@@ -82,6 +83,16 @@ needed, open browser.
   - `GET /api/diff` → manifest only: files, per-file add/del counts, rename
     status, generation number. Fast even for huge diffs.
   - `GET /api/diff/file?path=…` → hunks for one file, on demand.
+- Content search: `GET /api/search?q=…&revision=…` matches over the raw diff
+  hunks server-side (so collapsed/withheld files are searchable even though
+  their lines are never in the DOM); the UI binds it to Cmd/Ctrl+F. Returns
+  `{file, hunk_index, line, side, preview}` matches, capped.
+- Interdiff (what changed **between** two revisions, not vs the base):
+  - `GET /api/interdiff/manifest?from=…&to=…` → files whose new-side content
+    differs between the revisions, with add/del counts and availability.
+  - `GET /api/interdiff?file=…&from=…&to=…` → line-level hunks in the same
+    shape as `/api/diff/file`. Computed from per-revision new-side file
+    contents stored (gzipped) alongside each revision snapshot.
 - Binary/huge-file guards (skip content over a size threshold, offer raw).
 - The `working` range also includes **untracked** files (agents create files
   constantly): enumerated via `git ls-files --others --exclude-standard`,
@@ -104,6 +115,8 @@ mutation):
   "comments": [{
     "id": "…", "file": "src/x.ts", "line": 42, "end_line": 45,
     "side": "new", "text": "…", "tag": "must-fix",  // must-fix|suggestion|question|nit|null
+    "kind": "line",             // review | line | file-note (see below)
+    "suggestion": null,         // reviewer's exact replacement text, or null
     "state": "submitted",       // draft | submitted | addressed | resolved | orphaned
     "revision": 2,              // revision it was written against
     "anchor": { "context_before": [...], "context_after": [...] },
@@ -120,6 +133,16 @@ The review model follows the design spec (`design/prediff-interaction-spec.md`
   revision; raw diff text per revision is persisted (compressed) so older
   revisions stay viewable. The UI never auto-applies a new revision — it
   queues behind a banner; the reviewer switches when ready.
+- **Comment kinds.** Not every comment is line-anchored: `kind: "review"`
+  (`file: null`, `line: 0`) is a review-level comment on the change as a
+  whole — the GitHub "review summary" equivalent — and `kind: "file-note"`
+  is about a whole file. Both travel through the same submit/wait/resolve
+  channel as line comments; re-anchoring only ever touches `line` comments
+  (review/file-note comments are never auto-addressed or orphaned).
+- **Suggestions.** A line comment may carry `suggestion`: the reviewer's
+  exact replacement text for the anchored range. Never auto-applied — the
+  agent fetches it (with the range's current lines, for a pre-apply check)
+  via `prediff suggestion <id>` / `GET /api/comments/:id/suggestion`.
 - **Comment lifecycle** (spec §4.2): `draft` (autosaved server-side, not yet
   visible to the agent) → `submitted` (via **Send Feedback**, which batches
   all drafts and wakes the agent; per-comment "send now" also exists) →
