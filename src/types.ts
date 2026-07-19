@@ -157,6 +157,13 @@ export interface ReviewComment {
   text: string;
   state: CommentState;
   tag: CommentTag | null;
+  /**
+   * The reviewer's exact replacement text for the anchored line range
+   * (GitHub suggested-change equivalent, QA gap §1.5). Line comments only;
+   * null when the comment has no concrete suggestion. Never auto-applied —
+   * agents fetch it via `prediff suggestion <id>`.
+   */
+  suggestion: string | null;
   /** Revision the comment was written against (or last re-anchored to). */
   revision: number;
   anchor: CommentAnchor;
@@ -337,6 +344,22 @@ export interface FileContentResult {
   path: string;
   side: Side;
   lines: string[];
+}
+
+/**
+ * GET /api/comments/:id/suggestion — everything an agent needs to apply a
+ * reviewer's suggested change precisely (CLI: `prediff suggestion <id>`).
+ */
+export interface SuggestionResult {
+  id: string;
+  file: string;
+  line: number;
+  end_line: number;
+  side: Side;
+  /** The anchored lines as they exist NOW in the current revision. */
+  current_lines: string[];
+  /** Exact replacement text for lines line..end_line. */
+  suggestion: string;
 }
 
 export type WaitReason = "ready" | "feedback" | "timeout";

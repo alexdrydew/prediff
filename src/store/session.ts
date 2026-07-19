@@ -35,6 +35,8 @@ export interface NewCommentInput {
   kind: CommentKind;
   text: string;
   tag?: CommentTag | null;
+  /** Exact replacement text for the anchored range (line comments only). */
+  suggestion?: string | null;
 }
 
 export class SessionStore {
@@ -156,6 +158,7 @@ function normalizeComment(comment: ReviewComment): void {
     comment.kind =
       comment.file === null ? "review" : comment.line === 0 ? "file-note" : "line";
   }
+  if (comment.suggestion === undefined) comment.suggestion = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +180,7 @@ export function addComment(
     text: input.text,
     state: "draft",
     tag: input.tag ?? null,
+    suggestion: input.suggestion ?? null,
     revision: session.revision,
     anchor: anchorLines,
     replies: [],

@@ -8,11 +8,21 @@
  * the reviewer until sent (spec §4.2).
  */
 
-import type { OpenResult, ReviewComment, StatusResult, WaitResult } from "../types";
+import type { OpenResult, ReviewComment, StatusResult, SuggestionResult, WaitResult } from "../types";
 import { CliError, api, ensureDaemon, findDaemon, requireRepoRoot } from "./client";
 import { pidAlive } from "../server/lockfile";
 
-const COMMANDS = new Set(["open", "status", "comments", "wait", "resolve", "refresh", "stop", "help"]);
+const COMMANDS = new Set([
+  "open",
+  "status",
+  "comments",
+  "suggestion",
+  "wait",
+  "resolve",
+  "refresh",
+  "stop",
+  "help",
+]);
 
 const COMMENT_STATES: ReadonlySet<string> = new Set([
   "submitted",
@@ -152,8 +162,33 @@ function formatComment(c: ReviewComment): string {
         ? `${c.file} (file note)`
         : `${c.file}:${range} (${c.side})`;
   const lines = [`[${c.state}]${tag} ${c.id} ${location}`, `  ${c.text}`];
+  if (c.suggestion !== null) {
+    lines.push(`  suggested replacement (prediff suggestion ${c.id}):`);
+    for (const s of c.suggestion.split("\n")) lines.push(`  + ${s}`);
+  }
   for (const r of c.replies) lines.push(`  ↳ (${r.from}) ${r.text}`);
   return lines.join("\n");
+}
+
+async function cmdSuggestion(args: ParsedArgs): Promise<number> {
+  const json = args.flags.has("json");
+  const id = args.positional[0];
+  if (!id) throw new CliError("usage: prediff suggestion <comment-id> [--json]");
+  const lock = await requireDaemon(await requireRepoRoot());
+  const result = await api<SuggestionResult>(
+    lock,
+    `/api/comments/${encodeURIComponent(id)}/suggestion`,
+  );
+  out(json, result, (s: SuggestionResult) =>
+    [
+      `${s.file}:${s.line === s.end_line ? s.line : `${s.line}-${s.end_line}`} (${s.side})`,
+      "  current:",
+      ...s.current_lines.map((l) => `  - ${l}`),
+      "  suggested:",
+      ...s.suggestion.split("\n").map((l) => `  + ${l}`),
+    ].join("\n"),
+  );
+  return 0;
 }
 
 async function cmdComments(args: ParsedArgs): Promise<number> {
@@ -272,6 +307,8 @@ function cmdHelp(): number {
       "  status                    session snapshot: state, revision, comment counts",
       "  comments [--state <s>]    list comments (drafts always excluded)",
       "           [--unresolved]   s: submitted | addressed | resolved | orphaned",
+      "  suggestion <id>           print a comment's suggested replacement as",
+      "                            {file, line, end_line, current_lines, suggestion}",
       "  wait --timeout <s>        long-poll; exits 0=ready 2=feedback 3=timeout",
       "  resolve <id> [--reply t]  mark a comment resolved (with an optional reply)",
       "  refresh                   recompute the diff (bumps the revision)",
@@ -293,6 +330,8 @@ async function main(): Promise<number> {
       return cmdStatus(args);
     case "comments":
       return cmdComments(args);
+    case "suggestion":
+      return cmdSuggestion(args);
     case "wait":
       return cmdWait(args);
     case "resolve":

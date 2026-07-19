@@ -25,6 +25,7 @@ import type {
   Session,
   Side,
   StatusResult,
+  SuggestionResult,
   WaitReason,
   WaitResult,
 } from "../types";
@@ -612,11 +613,11 @@ export class Daemon {
       return this.createComment(await readBody(req));
     }
 
-    const commentMatch = /^\/api\/comments\/([^/]+)(?:\/(resolve|reply|send|reanchor))?$/.exec(
-      pathname,
-    );
+    const commentMatch =
+      /^\/api\/comments\/([^/]+)(?:\/(resolve|reply|send|reanchor|suggestion))?$/.exec(pathname);
     if (commentMatch) {
       const [, id = "", action] = commentMatch;
+      if (method === "GET" && action === "suggestion") return this.suggestionFor(id);
       if (method === "POST" && action === "resolve") {
         return this.resolveComment(id, await readBody(req));
       }
@@ -895,6 +896,10 @@ export class Daemon {
     const side: Side = body["side"] === "old" ? "old" : "new";
     const tag = parseTag(body["tag"]);
     if (tag instanceof Response) return tag;
+    const suggestion = body["suggestion"];
+    if (suggestion !== undefined && suggestion !== null && typeof suggestion !== "string") {
+      return json({ error: "suggestion must be a string (or null)" }, 400);
+    }
 
     let input: NewCommentInput;
     let anchor: CommentAnchor = { context_before: [], lines: [], context_after: [] };
@@ -902,6 +907,9 @@ export class Daemon {
       const line = body["line"];
       if (line !== undefined && line !== 0) {
         return json({ error: "review-level comments (no file) must omit line" }, 400);
+      }
+      if (typeof suggestion === "string") {
+        return json({ error: "suggestion requires a line-anchored comment" }, 400);
       }
       input = { file: null, line: 0, end_line: 0, side, kind: "review", text, tag };
     } else {
@@ -913,11 +921,23 @@ export class Daemon {
         );
       }
       if (line === 0) {
+        if (typeof suggestion === "string") {
+          return json({ error: "suggestion requires a line-anchored comment" }, 400);
+        }
         input = { file, line: 0, end_line: 0, side, kind: "file-note", text, tag };
       } else {
         const endLine = typeof body["end_line"] === "number" ? body["end_line"] : line;
         if (endLine < line) return json({ error: "invalid line range" }, 400);
-        input = { file, line, end_line: endLine, side, kind: "line", text, tag };
+        input = {
+          file,
+          line,
+          end_line: endLine,
+          side,
+          kind: "line",
+          text,
+          tag,
+          suggestion: suggestion ?? null,
+        };
         const content = await sideContent(this.opts.repoRoot, this.range, side, file);
         if (content) anchor = buildAnchor(content, line, endLine);
       }
@@ -969,6 +989,16 @@ export class Daemon {
       const tag = parseTag(body["tag"]);
       if (tag instanceof Response) return tag;
       comment.tag = tag;
+    }
+    if ("suggestion" in body) {
+      const suggestion = body["suggestion"];
+      if (suggestion !== null && typeof suggestion !== "string") {
+        return json({ error: "suggestion must be a string (or null)" }, 400);
+      }
+      if (typeof suggestion === "string" && comment.kind !== "line") {
+        return json({ error: "suggestion requires a line-anchored comment" }, 400);
+      }
+      comment.suggestion = suggestion;
     }
     const state = body["state"];
     if (state !== undefined) {
@@ -1040,6 +1070,30 @@ export class Daemon {
     await this.store.save(this.session);
     this.hub.broadcast("comment.updated", { comment });
     return json(comment);
+  }
+
+  /**
+   * GET /api/comments/:id/suggestion — the reviewer's exact replacement text
+   * plus the anchored lines as they exist NOW, so an agent can apply the
+   * suggestion precisely (QA gap §1.5). Never applied to files by prediff.
+   */
+  private async suggestionFor(id: string): Promise<Response> {
+    const comment = findComment(this.session, id);
+    if (!comment) return json({ error: "comment not found" }, 404);
+    if (comment.suggestion === null || comment.kind !== "line" || comment.file === null) {
+      return json({ error: `comment ${id} has no suggestion` }, 400);
+    }
+    const content = await sideContent(this.opts.repoRoot, this.range, comment.side, comment.file);
+    const result: SuggestionResult = {
+      id: comment.id,
+      file: comment.file,
+      line: comment.line,
+      end_line: comment.end_line,
+      side: comment.side,
+      current_lines: content ? content.slice(comment.line - 1, comment.end_line) : [],
+      suggestion: comment.suggestion,
+    };
+    return json(result);
   }
 
   private async deleteComment(id: string): Promise<Response> {

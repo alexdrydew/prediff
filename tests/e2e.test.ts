@@ -241,6 +241,45 @@ test("resolve with reply via CLI; resolving a draft is rejected", async () => {
   await http(`/api/comments/${draft.id}`, { method: "DELETE" });
 }, 20_000);
 
+test("suggestion: exact replacement readable via the CLI, never auto-applied", async () => {
+  const draft = await http<ReviewComment>("/api/comments", {
+    method: "POST",
+    body: JSON.stringify({
+      file: "src/app.ts",
+      line: 4,
+      side: "new",
+      text: "clamp to integers",
+      tag: "suggestion",
+      suggestion: "  return Math.trunc(a) + Math.trunc(b);",
+    }),
+  });
+  await http(`/api/comments/${draft.id}/send`, { method: "POST" });
+
+  // comments --json carries the suggestion field.
+  const { comments } = cliJson<{ comments: ReviewComment[] }>(await cli(["comments", "--json"]));
+  expect(comments.find((c) => c.id === draft.id)!.suggestion).toContain("Math.trunc");
+
+  const r = await cli(["suggestion", draft.id, "--json"]);
+  expect(r.code).toBe(0);
+  const s = cliJson<{ file: string; line: number; end_line: number; current_lines: string[]; suggestion: string }>(r);
+  expect(s).toMatchObject({
+    file: "src/app.ts",
+    line: 4,
+    end_line: 4,
+    current_lines: ["  return a + b;"],
+    suggestion: "  return Math.trunc(a) + Math.trunc(b);",
+  });
+
+  // The file itself is untouched — applying is the agent's job.
+  expect(await Bun.file(path.join(repo, "src/app.ts")).text()).toContain("  return a + b;");
+
+  // A comment without a suggestion errors cleanly.
+  const plain = comments.find((c) => c.text === "nice fix")!;
+  expect((await cli(["suggestion", plain.id, "--json"])).code).not.toBe(0);
+
+  await cli(["resolve", draft.id, "--reply", "applied verbatim", "--json"]);
+}, 20_000);
+
 test("mark ready → wait returns 0 with reason ready", async () => {
   const waiting = cli(["wait", "--timeout", "15", "--json"]);
   await Bun.sleep(300);

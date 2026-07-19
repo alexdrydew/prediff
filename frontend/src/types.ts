@@ -5,6 +5,7 @@
 export type {
   CommentAnchor,
   CommentCounts,
+  CommentKind,
   CommentReply,
   CommentState,
   CommentTag,
@@ -15,6 +16,9 @@ export type {
   FileStatus,
   Hunk,
   HunkLine,
+  InterdiffFile,
+  InterdiffFileSummary,
+  InterdiffManifest,
   LineKind,
   ManifestFile,
   MarkReadyResult,
@@ -26,4 +30,5 @@ export type {
   Session,
   SessionState,
   Side,
+  SuggestionResult,
 } from "../../src/types";
