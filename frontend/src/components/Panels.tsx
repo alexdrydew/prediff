@@ -27,6 +27,7 @@ function truncate(text: string, n: number): string {
 }
 
 function commentLoc(c: ReviewComment): string {
+  if (c.file === null) return "review comment";
   return c.line === 0 ? `${c.file} (file note)` : `${c.file}:${c.line}`;
 }
 
@@ -170,11 +171,11 @@ function AttentionPanel(): ReactElement {
             <button
               style={{ color: "var(--accent-primary)" }}
               onClick={() => {
-                scrollToPath(c.file);
+                if (c.file !== null) scrollToPath(c.file);
                 closePanel();
               }}
             >
-              {c.file}
+              {c.file ?? "review comment"}
             </button>{" "}
             — originally line {c.line}, Rev {c.revision}
           </div>

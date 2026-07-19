@@ -165,6 +165,7 @@ const treeMemo = memoOne(
     const parsed = parseFilter(filterQuery);
     const byFile = new Map<string, { total: number; unresolved: number }>();
     for (const c of comments) {
+      if (c.file === null) continue; // review-level: not attached to any file
       const e = byFile.get(c.file) ?? { total: 0, unresolved: 0 };
       e.total++;
       if (c.state !== "resolved") e.unresolved++;

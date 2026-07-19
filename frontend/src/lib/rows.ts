@@ -100,7 +100,10 @@ function groupByFile(
     }
     return e;
   };
-  for (const c of comments) entry(c.file).comments.push(c);
+  // Review-level comments (file null) live in the review block, not on a file.
+  for (const c of comments) {
+    if (c.file !== null) entry(c.file).comments.push(c);
+  }
   for (const c of Object.values(composers)) entry(c.file).composers.push(c);
   return map;
 }
