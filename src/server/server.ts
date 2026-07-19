@@ -33,7 +33,7 @@ import {
   splitFileSections,
   type ResolvedRange,
 } from "../git/diff";
-import { buildAnchor, reanchorOutcome } from "../store/anchor";
+import { anchorWindowIntact, buildAnchor, reanchorOutcome } from "../store/anchor";
 import {
   SessionStore,
   addComment,
@@ -362,15 +362,19 @@ export class Daemon {
         comment.updated_at = new Date().toISOString();
         continue;
       }
+      // A fuzz-placed "match" can hide drift in the surrounding context (QA
+      // bug §2.1: a rewrite that preserves one common line). Compare the FULL
+      // anchor window against the new content BEFORE refreshing the anchor —
+      // any drift means the region was modified.
+      const modified =
+        outcome.kind === "modified" ||
+        !anchorWindowIntact(comment.anchor, lines!, outcome.line);
       comment.line = outcome.line;
       comment.end_line = outcome.end_line;
       comment.revision = this.session.revision;
       // Refresh the anchor so future re-anchors track the current content.
       comment.anchor = buildAnchor(lines!, outcome.line, outcome.end_line);
-      if (
-        outcome.kind === "modified" &&
-        (comment.state === "submitted" || comment.state === "addressed")
-      ) {
+      if (modified && (comment.state === "submitted" || comment.state === "addressed")) {
         comment.state = "addressed";
         comment.updated_at = new Date().toISOString();
       }

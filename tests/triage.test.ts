@@ -81,11 +81,13 @@ describe("orphaned-comment triage", () => {
   let healthy: ReviewComment;
 
   test("setup: deleting a region orphans the comments on it", async () => {
-    // Three comments on beta() (lines 5–7), one on alpha() (line 2).
+    // Three comments on beta() (lines 5–7), one on gamma() (line 10 — far
+    // enough that its full anchor window is outside the deleted region;
+    // anything closer is honestly "addressed" under the §2.1 window check).
     orphanA = await orphanedComment("beta A", 5);
     orphanB = await orphanedComment("beta B", 6);
     orphanC = await orphanedComment("beta C", 7);
-    healthy = await orphanedComment("alpha stays", 2);
+    healthy = await orphanedComment("gamma stays", 10);
 
     const gutted = APP.split("\n")
       .filter((l) => !/beta|return 2/.test(l))

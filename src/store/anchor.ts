@@ -59,6 +59,27 @@ export function reanchor(
   return null;
 }
 
+/**
+ * Whether the comment's FULL anchor window (context_before + lines +
+ * context_after) is reproduced verbatim at `line` (1-based) in `content`.
+ *
+ * `reanchor` can place a comment with fuzz — outer context lines dropped from
+ * the pattern — so a "match" outcome alone doesn't prove the surroundings are
+ * untouched (QA bug §2.1: a rewritten function that preserves one common line
+ * used to slip through as unmodified). Callers treat any window drift as
+ * "the region was modified" → addressed.
+ */
+export function anchorWindowIntact(
+  anchor: CommentAnchor,
+  content: string[],
+  line: number,
+): boolean {
+  const expected = [...anchor.context_before, ...anchor.lines, ...anchor.context_after];
+  const start = line - 1 - anchor.context_before.length;
+  if (start < 0 || start + expected.length > content.length) return false;
+  return matchesAt(expected, content, start);
+}
+
 // ---------------------------------------------------------------------------
 // Three-outcome re-anchoring (spec §6.4)
 

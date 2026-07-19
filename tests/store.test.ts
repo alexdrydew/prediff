@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writeJsonAtomic, readJson } from "../src/store/atomic";
-import { buildAnchor, reanchor, reanchorOutcome } from "../src/store/anchor";
+import { anchorWindowIntact, buildAnchor, reanchor, reanchorOutcome } from "../src/store/anchor";
 import { repoId, sessionPath } from "../src/store/paths";
 import { SessionStore, addComment, resolveComment } from "../src/store/session";
 import { cleanup, tempDir } from "./helpers";
@@ -187,5 +187,32 @@ describe("three-outcome re-anchoring (spec §6.4)", () => {
       ...content.slice(4),
     ];
     expect(reanchorOutcome(anchor, huge, 4)).toEqual({ kind: "lost" });
+  });
+});
+
+describe("full-window drift detection (QA bug §2.1)", () => {
+  const content = ["import x", "", "function foo() {", "  return 1;", "}", "", "const z = 2;"];
+
+  test("unchanged and shifted windows are intact", () => {
+    const anchor = buildAnchor(content, 4, 4);
+    expect(anchorWindowIntact(anchor, content, 4)).toBe(true);
+    expect(anchorWindowIntact(anchor, ["a", "b", ...content], 6)).toBe(true);
+  });
+
+  test("context rewritten around a preserved line → drift", () => {
+    const anchor = buildAnchor(content, 4, 4);
+    // The commented line survives verbatim, but its function was rewritten.
+    const rewritten = ["import x", "", "function foo(n: number) {", "  if (n) log(n);", "  return 1;", "}", "", "const z = 2;"];
+    expect(anchorWindowIntact(anchor, rewritten, 5)).toBe(false);
+  });
+
+  test("windows clipped by file boundaries compare only captured context", () => {
+    const anchor = buildAnchor(content, 1, 1); // no context_before exists
+    expect(anchor.context_before).toEqual([]);
+    // Prepending lines shifts the anchor; nothing above was ever captured.
+    expect(anchorWindowIntact(anchor, ["// new", ...content], 2)).toBe(true);
+    // A window that would run past EOF is drift, not a crash.
+    const tail = buildAnchor(content, 7, 7);
+    expect(anchorWindowIntact(tail, content.slice(0, 6), 7)).toBe(false);
   });
 });
