@@ -60,6 +60,7 @@ function rowContext(row: Row): { path: string | null; hunkIdx: number | null } {
 export function DiffViewer(): ReactElement {
   const rows = useStore(selectRows);
   const viewMode = useStore((s) => s.viewMode);
+  const wrapLines = useStore((s) => s.wrapLines);
   const canvasChars = useStore(selectCanvasChars);
   const parentRef = useRef<HTMLDivElement>(null);
   const topIndexRef = useRef(0);
@@ -122,6 +123,23 @@ export function DiffViewer(): ReactElement {
     registerDiffController({
       scrollToIndex: (index, align = "start") => {
         virtualizerRef.current.scrollToIndex(index, { align });
+        // With soft wrap on, row heights are estimates until rendered rows
+        // measure, so a deep jump can land short. Re-issue the scroll for a
+        // few frames until the target offset stabilizes (each extra pass is
+        // a no-op once measurements have settled — wrap off settles on the
+        // first frame).
+        let prevOffset: number | null = null;
+        let passes = 8;
+        const settle = (): void => {
+          const v = virtualizerRef.current;
+          const offset = v.getOffsetForIndex(index, align)?.[0];
+          if (offset === undefined) return;
+          if (prevOffset !== null && Math.abs(offset - prevOffset) < 1) return;
+          prevOffset = offset;
+          v.scrollToIndex(index, { align });
+          if (--passes > 0) requestAnimationFrame(settle);
+        };
+        requestAnimationFrame(settle);
         // Scroll events / rAF can be throttled (background tabs); make sure
         // the sticky header and top-index tracking still catch up.
         setTimeout(updateContext, 50);
@@ -130,6 +148,35 @@ export function DiffViewer(): ReactElement {
     });
     return () => registerDiffController(null);
   }, [computeTopIndex, updateContext]);
+
+  // Toggling wrap changes every code row's height: drop cached measurements
+  // so stale wrapped heights never position unwrapped rows (and vice versa).
+  const wrapWasOn = useRef(wrapLines);
+  useEffect(() => {
+    if (wrapWasOn.current === wrapLines) return;
+    wrapWasOn.current = wrapLines;
+    virtualizerRef.current.measure();
+  }, [wrapLines]);
+
+  // With wrap on, wrapped heights depend on the pane width. Rendered rows
+  // re-measure themselves (measureElement observes them), but cached offscreen
+  // measurements would go stale — flush the cache when the width changes
+  // (window resize, tree-width drag).
+  useEffect(() => {
+    if (!wrapLines) return;
+    const el = parentRef.current;
+    if (!el) return;
+    let lastWidth = el.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const width = el.clientWidth;
+      if (width !== lastWidth) {
+        lastWidth = width;
+        virtualizerRef.current.measure();
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [wrapLines]);
 
   useEffect(() => {
     const el = parentRef.current;
@@ -173,22 +220,25 @@ export function DiffViewer(): ReactElement {
   // Selection commit lives in beginSelection (store); Escape-cancel lives in
   // the global keyboard model. Nothing to wire up here.
 
-  // Unified mode canvas grows with the longest loaded line so long code is
-  // reachable by horizontal scroll; split mode ellipsizes within panes.
+  // With wrap off, the unified-mode canvas grows with the longest loaded line
+  // so long code is reachable by horizontal scroll (split mode ellipsizes
+  // within panes). With wrap on, code wraps to the pane width instead.
   const canvasMinWidth =
-    viewMode === "unified" ? `calc(${canvasChars}ch + ${ROW_CHROME_PX}px)` : "100%";
+    viewMode === "unified" && !wrapLines
+      ? `calc(${canvasChars}ch + ${ROW_CHROME_PX}px)`
+      : "100%";
 
   return (
     <div className="diff-wrap">
       <div className="diff-scroll" ref={parentRef}>
         <div
-          className="diff-canvas"
+          className={`diff-canvas${wrapLines ? " wrap" : ""}`}
           style={{ height: virtualizer.getTotalSize(), minWidth: canvasMinWidth }}
         >
           {virtualizer.getVirtualItems().map((item) => {
             const row = rows[item.index];
             if (!row) return null;
-            const dynamic = isDynamicRow(row);
+            const dynamic = isDynamicRow(row, wrapLines);
             return (
               <div
                 key={item.key}

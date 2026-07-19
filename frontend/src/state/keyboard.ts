@@ -2,7 +2,7 @@
  * Global keyboard model — exactly the spec §8 table, nothing more:
  *   j/k hunks · n/p files · c comment · Cmd/Ctrl+Enter submit (composer-local)
  *   Esc cancel/close · v viewed · ]/[ unresolved comments · / filter ·
- *   d view toggle · ? shortcut overlay
+ *   d view toggle · w wrap toggle · ? shortcut overlay
  */
 
 import {
@@ -17,6 +17,7 @@ import {
   setViewMode,
   store,
   toggleViewed,
+  toggleWrapLines,
 } from "./store";
 import { selectRows } from "./selectors";
 import { currentFocusIndex, focusFilter, noteKeyboardFocus, scrollToRow } from "./controller";
@@ -144,6 +145,9 @@ export function initKeyboard(): () => void {
         break;
       case "d":
         setViewMode(s.viewMode === "unified" ? "split" : "unified");
+        break;
+      case "w":
+        toggleWrapLines();
         break;
       case "?":
         setPanel("shortcuts");

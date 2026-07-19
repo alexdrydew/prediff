@@ -14,6 +14,7 @@ import {
   setPanel,
   setTheme,
   setViewMode,
+  toggleWrapLines,
   useStore,
 } from "../state/store";
 import { scrollToRow } from "../state/controller";
@@ -112,6 +113,27 @@ function ThemeToggle(): ReactElement {
   );
 }
 
+/** Soft-wrap toggle for long diff lines (persisted view pref, default on). */
+function WrapToggle(): ReactElement {
+  const wrap = useStore((s) => s.wrapLines);
+  return (
+    <button
+      className="icon-btn"
+      aria-pressed={wrap}
+      aria-label="Wrap long lines"
+      title={wrap ? "Wrap long lines: on (w)" : "Wrap long lines: off (w)"}
+      onClick={toggleWrapLines}
+    >
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M2 3.5h12" />
+        <path d="M2 8h9.5a2.25 2.25 0 0 1 0 4.5H8" />
+        <path d="M9.5 10.75 8 12.5l1.5 1.75" />
+        <path d="M2 12.5h3" />
+      </svg>
+    </button>
+  );
+}
+
 export function TopBar(): ReactElement {
   const session = useStore((s) => s.session);
   const viewMode = useStore((s) => s.viewMode);
@@ -164,6 +186,7 @@ export function TopBar(): ReactElement {
           Unified
         </button>
       </div>
+      <WrapToggle />
       <div className="prog">
         <span>
           {tree.viewedFiles} / {tree.totalFiles} viewed

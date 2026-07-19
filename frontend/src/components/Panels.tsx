@@ -277,6 +277,7 @@ const SHORTCUTS: ReadonlyArray<[string, string]> = [
   ["/", "Focus the file-tree filter"],
   ["⌘/Ctrl+F", "Search diff content (all files, even collapsed)"],
   ["d", "Toggle side-by-side / unified"],
+  ["w", "Toggle soft-wrapping of long lines"],
   ["?", "This overlay"],
 ];
 

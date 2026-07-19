@@ -421,6 +421,13 @@ textarea:focus {
   background: var(--bg-surface-hover);
 }
 
+/* toggle-style icon buttons (e.g. soft wrap) show their pressed state */
+.icon-btn[aria-pressed="true"] {
+  color: var(--accent-primary);
+  background: var(--accent-primary-subtle);
+  border-color: var(--accent-primary);
+}
+
 /* ═══ Body ═══ */
 
 .body-row {
@@ -1243,6 +1250,35 @@ textarea:focus {
 
 .row-split .side.empty .gutter:hover::before {
   content: none;
+}
+
+/* soft wrap (.diff-canvas.wrap): long lines wrap instead of truncating.
+   Rows grow to fit; the virtualizer measures rendered code rows. Gutters and
+   the sign column keep the default flex `stretch` so their backgrounds cover
+   the full (multi-line) row while their text stays on the first visual line.
+   Continuation lines hang 2ch past the line start (padding + negative
+   text-indent) so wraps read as continuations, not new lines. */
+.diff-canvas.wrap .row-line,
+.diff-canvas.wrap .row-split {
+  height: auto;
+  min-height: var(--line-height-code);
+}
+
+.diff-canvas.wrap .row-line .code,
+.diff-canvas.wrap .row-split .code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-indent: -2ch;
+}
+
+.diff-canvas.wrap .row-line .code {
+  padding-left: calc(2px + 2ch);
+}
+
+.diff-canvas.wrap .row-split .code {
+  overflow: visible;
+  text-overflow: clip;
+  padding-left: calc(6px + 2ch);
 }
 
 /* meta rows */

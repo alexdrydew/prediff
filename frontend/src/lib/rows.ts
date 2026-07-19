@@ -473,9 +473,12 @@ function lineKey(path: string, line: HunkLine, hunkIdx: number, lineIdx: number)
 }
 
 // ---------------------------------------------------------------------------
-// Height estimation for the virtualizer. Line rows are fixed-height (no
-// wrapping; horizontal overflow scrolls), so only thread/composer rows need
-// real measurement.
+// Height estimation for the virtualizer. With wrap OFF, line rows are
+// fixed-height (unified scrolls horizontally on a wide canvas; split
+// ellipsizes within panes) and only thread/composer rows need measurement.
+// With wrap ON (`white-space: pre-wrap`), line/pair rows can grow, so they
+// join the measured set — the estimate stays LINE_ROW_PX (one visual line)
+// and only rendered rows ever get measured.
 
 export const LINE_ROW_PX = 22;
 export const FILE_ROW_PX = 36;
@@ -508,7 +511,12 @@ export function estimateRowHeight(row: Row): number {
   }
 }
 
-/** Rows whose height varies with content and must be measured after mount. */
-export function isDynamicRow(row: Row): boolean {
-  return row.kind === "thread" || row.kind === "composer" || row.kind === "review-composer";
+/** Rows whose height varies with content and must be measured after mount.
+ * When soft wrap is on, code rows can span multiple visual lines and must be
+ * measured too; with wrap off they keep the fixed-height fast path. */
+export function isDynamicRow(row: Row, wrapLines = false): boolean {
+  if (row.kind === "thread" || row.kind === "composer" || row.kind === "review-composer") {
+    return true;
+  }
+  return wrapLines && (row.kind === "line" || row.kind === "pair");
 }

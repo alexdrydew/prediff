@@ -166,6 +166,8 @@ export interface AppState {
   syncError: string | null;
 
   viewMode: ViewMode;
+  /** Soft-wrap long diff lines instead of truncating/scrolling (view pref). */
+  wrapLines: boolean;
   theme: Theme;
   treeWidth: number;
   kbarDismissed: boolean;
@@ -233,6 +235,7 @@ export const store = createStore<AppState>(() => ({
   syncError: null,
 
   viewMode: readPref<ViewMode>("viewMode", "split"),
+  wrapLines: readPref<boolean>("wrapLines", true),
   theme: "dark",
   treeWidth: readPref<number>("treeWidth", 280),
   kbarDismissed: readPref<boolean>("kbarDismissed", false),
@@ -871,6 +874,15 @@ export async function dismissOrphan(id: string): Promise<void> {
 export function setViewMode(viewMode: ViewMode): void {
   setState({ viewMode });
   writePref("viewMode", viewMode);
+}
+
+export function setWrapLines(wrapLines: boolean): void {
+  setState({ wrapLines });
+  writePref("wrapLines", wrapLines);
+}
+
+export function toggleWrapLines(): void {
+  setWrapLines(!getState().wrapLines);
 }
 
 export function setTheme(theme: Theme): void {

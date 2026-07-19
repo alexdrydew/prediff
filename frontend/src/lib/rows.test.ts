@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import type { FileDiff, HunkLine, ManifestFile, ReviewComment } from "../types";
 import type { ComposerTarget, FileDiffState } from "../state/store";
-import { buildRows, estimateRowHeight, LINE_ROW_PX, type Row, type RowsInput } from "./rows";
+import {
+  buildRows,
+  estimateRowHeight,
+  isDynamicRow,
+  LINE_ROW_PX,
+  type Row,
+  type RowsInput,
+} from "./rows";
 
 // ---------------------------------------------------------------------------
 // fixtures
@@ -445,5 +452,69 @@ describe("windowing math", () => {
     expect(elapsed).toBeLessThan(500); // row model must never be the bottleneck
     const keys = new Set(rows.map((r) => r.key));
     expect(keys.size).toBe(rows.length);
+  });
+
+  test("soft wrap makes code rows measured, but keeps the cheap estimate", () => {
+    const lines = [line("del", 2, null), line("add", null, 2)];
+    const unified = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        expanded: new Set(["a.ts"]),
+        fileDiffs: { "a.ts": ready(diff("a.ts", lines)) },
+      }),
+    );
+    const split = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        expanded: new Set(["a.ts"]),
+        fileDiffs: { "a.ts": ready(diff("a.ts", lines)) },
+        viewMode: "split",
+      }),
+    );
+    const lineRow = unified.find((r) => r.kind === "line")!;
+    const pairRow = split.find((r) => r.kind === "pair")!;
+    const fileRow = unified.find((r) => r.kind === "file")!;
+    const hunkRow = unified.find((r) => r.kind === "hunk")!;
+
+    // Wrap off (default): line/pair rows keep the fixed-height fast path.
+    expect(isDynamicRow(lineRow)).toBe(false);
+    expect(isDynamicRow(pairRow)).toBe(false);
+    expect(isDynamicRow(lineRow, false)).toBe(false);
+
+    // Wrap on: line/pair rows join the measured set…
+    expect(isDynamicRow(lineRow, true)).toBe(true);
+    expect(isDynamicRow(pairRow, true)).toBe(true);
+    // …but chrome rows stay fixed either way.
+    expect(isDynamicRow(fileRow, true)).toBe(false);
+    expect(isDynamicRow(hunkRow, true)).toBe(false);
+
+    // The initial estimate never changes: one visual line per row.
+    expect(estimateRowHeight(lineRow)).toBe(LINE_ROW_PX);
+    expect(estimateRowHeight(pairRow)).toBe(LINE_ROW_PX);
+  });
+
+  test("thread/composer rows are measured regardless of wrap", () => {
+    const target: ComposerTarget = {
+      key: "a.ts new 2 2",
+      file: "a.ts",
+      side: "new",
+      line: 2,
+      end_line: 2,
+    };
+    const rows = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        expanded: new Set(["a.ts"]),
+        fileDiffs: { "a.ts": ready(diff("a.ts", [line("add", null, 2)])) },
+        comments: [comment("c1", "a.ts", 2)],
+        composers: { [target.key]: target },
+      }),
+    );
+    const thread = rows.find((r) => r.kind === "thread")!;
+    const composer = rows.find((r) => r.kind === "composer")!;
+    for (const wrap of [false, true]) {
+      expect(isDynamicRow(thread, wrap)).toBe(true);
+      expect(isDynamicRow(composer, wrap)).toBe(true);
+    }
   });
 });
