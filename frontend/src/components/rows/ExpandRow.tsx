@@ -4,7 +4,8 @@ import type { GapInfo } from "../../lib/rows";
 import { expandContext, useStore } from "../../state/store";
 
 /** "Expand context" control between hunks (spec §3.2). Disabled while an
- * older revision is pinned — file content is only served for the latest. */
+ * older revision is pinned — file content is only served for the latest —
+ * and in the read-only interdiff comparison view (§1.4). */
 export const ExpandRow = memo(function ExpandRow({
   path,
   gap,
@@ -13,7 +14,9 @@ export const ExpandRow = memo(function ExpandRow({
   gap: GapInfo;
 }): ReactElement {
   const historical = useStore(
-    (s) => s.viewingRevision !== null && s.viewingRevision !== s.session?.revision,
+    (s) =>
+      s.interdiff !== null ||
+      (s.viewingRevision !== null && s.viewingRevision !== s.session?.revision),
   );
   if (historical) {
     return (
