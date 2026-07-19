@@ -26,6 +26,8 @@ export type {
   ReviewComment,
   RevisionInfo,
   RevisionsResult,
+  SearchMatch,
+  SearchResult,
   SendFeedbackResult,
   Session,
   SessionState,

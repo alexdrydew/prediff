@@ -362,6 +362,30 @@ export interface SuggestionResult {
   suggestion: string;
 }
 
+/**
+ * GET /api/search?q=&revision= — one content match inside the diff's hunks
+ * (in-diff content search, QA gap §1.3). Computed server-side over the raw
+ * diff so collapsed/withheld files are searchable too.
+ */
+export interface SearchMatch {
+  file: string;
+  /** Index of the hunk (within the file's diff) containing the match. */
+  hunk_index: number;
+  /** 1-based line number on `side`. */
+  line: number;
+  side: Side;
+  /** The matched line's text, trimmed around the first match. */
+  preview: string;
+}
+
+export interface SearchResult {
+  query: string;
+  revision: number;
+  matches: SearchMatch[];
+  /** True when results were capped (SEARCH_MAX_RESULTS). */
+  truncated: boolean;
+}
+
 export type WaitReason = "ready" | "feedback" | "timeout";
 
 export interface WaitResult {

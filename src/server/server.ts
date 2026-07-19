@@ -22,6 +22,7 @@ import type {
   RevisionContents,
   RevisionSnapshot,
   RevisionsResult,
+  SearchResult,
   Session,
   Side,
   StatusResult,
@@ -56,6 +57,7 @@ import {
   type NewCommentInput,
 } from "../store/session";
 import { RevisionStore } from "../store/revisions";
+import { searchRawDiff } from "./search";
 import { EventHub } from "./events";
 import { RepoWatcher } from "./watcher";
 import {
@@ -595,6 +597,26 @@ export class Daemon {
       if (!file) return json({ error: `not in diff: ${filePath}` }, 404);
       const force = url.searchParams.get("force") === "1";
       return json(await this.fileDiff(file, force));
+    }
+
+    // In-diff content search over hunk lines (QA gap §1.3). Server-side so
+    // collapsed and large-withheld files are searchable too.
+    if (pathname === "/api/search" && method === "GET") {
+      const q = url.searchParams.get("q");
+      if (q === null || q === "") return json({ error: "missing ?q=" }, 400);
+      const revision = parseRevision(url);
+      if (revision instanceof Response) return revision;
+      let raw = this.rawDiff;
+      let rev = this.session.revision;
+      if (revision !== null && revision !== this.session.revision) {
+        const snapshot = await this.revisions.load(this.session.session_id, revision);
+        if (!snapshot) return json({ error: `revision not found: ${revision}` }, 404);
+        raw = snapshot.raw_diff;
+        rev = revision;
+      }
+      const { matches, truncated } = searchRawDiff(raw, q);
+      const result: SearchResult = { query: q, revision: rev, matches, truncated };
+      return json(result);
     }
 
     if (pathname === "/api/interdiff/manifest" && method === "GET") {
