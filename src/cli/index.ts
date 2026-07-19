@@ -145,7 +145,13 @@ async function cmdStatus(args: ParsedArgs): Promise<number> {
 function formatComment(c: ReviewComment): string {
   const range = c.line === c.end_line ? `${c.line}` : `${c.line}-${c.end_line}`;
   const tag = c.tag ? ` (${c.tag})` : "";
-  const lines = [`[${c.state}]${tag} ${c.id} ${c.file}:${range} (${c.side})`, `  ${c.text}`];
+  const location =
+    c.kind === "review"
+      ? "(review-level)"
+      : c.kind === "file-note"
+        ? `${c.file} (file note)`
+        : `${c.file}:${range} (${c.side})`;
+  const lines = [`[${c.state}]${tag} ${c.id} ${location}`, `  ${c.text}`];
   for (const r of c.replies) lines.push(`  ↳ (${r.from}) ${r.text}`);
   return lines.join("\n");
 }

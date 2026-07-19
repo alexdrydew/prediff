@@ -11,6 +11,7 @@
 
 import {
   SCHEMA_VERSION,
+  type CommentKind,
   type CommentReply,
   type CommentTag,
   type FeedbackBatch,
@@ -26,10 +27,12 @@ export function newId(prefix: string): string {
 }
 
 export interface NewCommentInput {
-  file: string;
+  /** null for review-level comments. */
+  file: string | null;
   line: number;
   end_line?: number;
   side?: Side;
+  kind: CommentKind;
   text: string;
   tag?: CommentTag | null;
 }
@@ -99,6 +102,8 @@ export function migrateSession(raw: Record<string, unknown>): Session {
     const session = raw as unknown as Session;
     // Additive v2 field: sessions written before scope_files existed.
     session.scope_files = normalizeScopeFiles(raw["scope_files"]);
+    // Additive comment fields (kind): normalize in place.
+    for (const comment of session.comments) normalizeComment(comment);
     return session;
   }
 
@@ -133,13 +138,24 @@ function normalizeScopeFiles(value: unknown): string[] | null {
 function migrateComment(raw: Record<string, unknown>): ReviewComment {
   const state = V1_COMMENT_STATE[String(raw["state"])] ?? "submitted";
   const c = raw as unknown as ReviewComment;
-  return {
+  const migrated: ReviewComment = {
     ...c,
     state,
     tag: (raw["tag"] as CommentTag | undefined) ?? null,
     revision: typeof raw["generation"] === "number" ? raw["generation"] : (c.revision ?? 1),
     batch_id: typeof raw["batch_id"] === "string" ? raw["batch_id"] : null,
   };
+  normalizeComment(migrated);
+  return migrated;
+}
+
+/** Fill in comment fields added after the session was written (in place). */
+function normalizeComment(comment: ReviewComment): void {
+  if (comment.file === undefined) comment.file = null;
+  if (comment.kind === undefined) {
+    comment.kind =
+      comment.file === null ? "review" : comment.line === 0 ? "file-note" : "line";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +173,7 @@ export function addComment(
     line: input.line,
     end_line: input.end_line ?? input.line,
     side: input.side ?? "new",
+    kind: input.kind,
     text: input.text,
     state: "draft",
     tag: input.tag ?? null,
@@ -250,10 +267,19 @@ export function setViewed(session: Session, file: string, viewed: boolean): bool
 }
 
 export function commentCounts(session: Session) {
-  const counts = { total: 0, draft: 0, submitted: 0, addressed: 0, resolved: 0, orphaned: 0 };
+  const counts = {
+    total: 0,
+    draft: 0,
+    submitted: 0,
+    addressed: 0,
+    resolved: 0,
+    orphaned: 0,
+    kinds: { review: 0, line: 0, "file-note": 0 } as Record<CommentKind, number>,
+  };
   for (const c of session.comments) {
     counts.total++;
     counts[c.state]++;
+    counts.kinds[c.kind]++;
   }
   return counts;
 }

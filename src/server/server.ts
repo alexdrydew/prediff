@@ -6,6 +6,7 @@
 
 import path from "node:path";
 import type {
+  CommentAnchor,
   CommentTag,
   DiffManifest,
   FeedbackBatch,
@@ -347,6 +348,9 @@ export class Daemon {
 
     for (const comment of this.session.comments) {
       if (comment.state === "resolved" || comment.state === "orphaned") continue;
+      // Only line-anchored comments track content; review-level comments and
+      // file notes are never addressed/orphaned automatically (QA gap §1.1).
+      if (comment.kind !== "line" || comment.file === null) continue;
       if (comment.anchor.lines.length === 0) continue; // nothing to match against
       const lines = await content(comment.file, comment.side);
       const outcome = lines
@@ -643,7 +647,11 @@ export class Daemon {
       const states = new Set(stateFilter.split(","));
       comments = comments.filter((c) => states.has(c.state));
     }
-    return comments;
+    // Review-level comments first (they frame everything else); otherwise
+    // stable creation order.
+    return comments
+      .slice()
+      .sort((a, b) => Number(a.kind !== "review") - Number(b.kind !== "review"));
   }
 
   private status(): StatusResult {
@@ -663,26 +671,51 @@ export class Daemon {
   // -------------------------------------------------------------------------
   // Comment handlers
 
-  /** Comments are always created as drafts (spec §4.2); submission happens
-   * via /api/feedback/send or /api/comments/:id/send. */
+  /**
+   * Comments are always created as drafts (spec §4.2); submission happens
+   * via /api/feedback/send or /api/comments/:id/send. Three kinds:
+   *  - no `file` → a review-level comment (kind "review", QA gap §1.1);
+   *  - `file` with `line: 0` → a file note (kind "file-note");
+   *  - `file` with `line ≥ 1` → a classic line-anchored comment.
+   */
   private async createComment(body: JsonBody): Promise<Response> {
-    const file = body["file"];
-    const line = body["line"];
     const text = body["text"];
-    if (typeof file !== "string" || typeof line !== "number" || typeof text !== "string") {
-      return json({ error: "required: file (string), line (number), text (string)" }, 400);
+    if (typeof text !== "string") return json({ error: "required: text (string)" }, 400);
+    const rawFile = body["file"];
+    if (rawFile !== undefined && rawFile !== null && typeof rawFile !== "string") {
+      return json({ error: "file must be a string (omit it for a review-level comment)" }, 400);
     }
+    const file = typeof rawFile === "string" ? rawFile : null;
     const side: Side = body["side"] === "old" ? "old" : "new";
-    const endLine = typeof body["end_line"] === "number" ? body["end_line"] : line;
-    if (endLine < line || line < 1) return json({ error: "invalid line range" }, 400);
     const tag = parseTag(body["tag"]);
     if (tag instanceof Response) return tag;
 
-    const input: NewCommentInput = { file, line, end_line: endLine, side, text, tag };
-    const content = await sideContent(this.opts.repoRoot, this.range, side, file);
-    const anchor = content
-      ? buildAnchor(content, line, endLine)
-      : { context_before: [], lines: [], context_after: [] };
+    let input: NewCommentInput;
+    let anchor: CommentAnchor = { context_before: [], lines: [], context_after: [] };
+    if (file === null) {
+      const line = body["line"];
+      if (line !== undefined && line !== 0) {
+        return json({ error: "review-level comments (no file) must omit line" }, 400);
+      }
+      input = { file: null, line: 0, end_line: 0, side, kind: "review", text, tag };
+    } else {
+      const line = body["line"];
+      if (typeof line !== "number" || !Number.isInteger(line) || line < 0) {
+        return json(
+          { error: "required: line (number ≥ 1; 0 for a file note; omit file for review-level)" },
+          400,
+        );
+      }
+      if (line === 0) {
+        input = { file, line: 0, end_line: 0, side, kind: "file-note", text, tag };
+      } else {
+        const endLine = typeof body["end_line"] === "number" ? body["end_line"] : line;
+        if (endLine < line) return json({ error: "invalid line range" }, 400);
+        input = { file, line, end_line: endLine, side, kind: "line", text, tag };
+        const content = await sideContent(this.opts.repoRoot, this.range, side, file);
+        if (content) anchor = buildAnchor(content, line, endLine);
+      }
+    }
     const comment = addComment(this.session, input, anchor);
     await this.store.save(this.session);
     this.hub.broadcast("comment.created", { comment });
@@ -768,10 +801,14 @@ export class Daemon {
     if (comment.state !== "orphaned") {
       return json({ error: `not orphaned (state: ${comment.state})` }, 400);
     }
+    if (comment.file === null) {
+      return json({ error: "review-level comments have no anchor to re-anchor" }, 400);
+    }
 
     if (body["file_note"] === true) {
       comment.line = 0;
       comment.end_line = 0;
+      comment.kind = "file-note";
       comment.anchor = { context_before: [], lines: [], context_after: [] };
     } else {
       const line = body["line"];
@@ -788,6 +825,7 @@ export class Daemon {
       comment.line = line;
       comment.end_line = Math.min(endLine, content.length);
       comment.side = side;
+      comment.kind = "line";
       comment.anchor = buildAnchor(content, comment.line, comment.end_line);
     }
     comment.state = "submitted";

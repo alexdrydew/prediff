@@ -61,7 +61,7 @@ describe("session store", () => {
 
       const comment = addComment(
         session,
-        { file: "a.ts", line: 3, text: "why?" },
+        { file: "a.ts", line: 3, kind: "line", text: "why?" },
         { context_before: ["1", "2"], lines: ["3"], context_after: ["4"] },
       );
       await store.save(session);

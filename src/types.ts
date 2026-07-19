@@ -110,6 +110,17 @@ export type CommentState = "draft" | "submitted" | "addressed" | "resolved" | "o
 /** Optional intent tag (spec §4.3). */
 export type CommentTag = "must-fix" | "suggestion" | "question" | "nit";
 
+/**
+ * What a comment is anchored to (additive, QA gap §1.1):
+ *   line      — a line range in a file (the classic case);
+ *   file-note — a whole file, no line (line 0, empty anchor);
+ *   review    — the review as a whole (file null, line 0, empty anchor) —
+ *               GitHub's "review summary" equivalent.
+ * Re-anchoring only ever touches `line` comments; the other kinds are never
+ * addressed/orphaned automatically.
+ */
+export type CommentKind = "review" | "line" | "file-note";
+
 export type Side = "old" | "new";
 
 export interface CommentReply {
@@ -128,10 +139,15 @@ export interface CommentAnchor {
 
 export interface ReviewComment {
   id: string;
-  file: string;
+  /** File the comment is anchored to; null for review-level comments. */
+  file: string | null;
+  /** 1-based; 0 for review-level comments and file notes. */
   line: number;
   end_line: number;
   side: Side;
+  /** Anchoring kind (additive — older sessions are normalized on load:
+   * file-note when line === 0 with a file, else line). */
+  kind: CommentKind;
   text: string;
   state: CommentState;
   tag: CommentTag | null;
@@ -221,6 +237,8 @@ export interface CommentCounts {
   addressed: number;
   resolved: number;
   orphaned: number;
+  /** Per-kind breakdown (additive). */
+  kinds: Record<CommentKind, number>;
 }
 
 export interface StatusResult {
