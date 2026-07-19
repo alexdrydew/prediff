@@ -10,11 +10,13 @@ import {
   clearSyncError,
   loadServerState,
   openPanel,
+  openReviewComposer,
   setPanel,
   setTheme,
   setViewMode,
   useStore,
 } from "../state/store";
+import { scrollToRow } from "../state/controller";
 import { toggleTheme } from "../lib/theme";
 
 const SYNC_LABEL: Record<string, string> = {
@@ -177,6 +179,17 @@ export function TopBar(): ReactElement {
         )}
       </div>
       <ThemeToggle />
+      <button
+        className="btn btn-s"
+        disabled={ready}
+        title="Comment on the change as a whole — no line anchor (like a GitHub review summary)"
+        onClick={() => {
+          openReviewComposer();
+          scrollToRow(0);
+        }}
+      >
+        Review comment
+      </button>
       <button
         className="btn btn-s"
         disabled={ready}

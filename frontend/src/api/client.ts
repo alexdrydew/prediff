@@ -46,12 +46,16 @@ async function request<T>(route: string, init?: RequestInit): Promise<T> {
 }
 
 export interface NewCommentRequest {
-  file: string;
-  line: number;
+  /** Null (or absent) creates a review-level comment (QA gap §1.1). */
+  file?: string | null;
+  /** Required for line comments; 0 = file note; omitted for review-level. */
+  line?: number;
   end_line?: number;
-  side: Side;
+  side?: Side;
   text: string;
   tag?: CommentTag | null;
+  /** Exact replacement text for the anchored lines (line comments only). */
+  suggestion?: string | null;
 }
 
 export interface CommentPatch {

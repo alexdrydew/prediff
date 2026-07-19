@@ -40,5 +40,9 @@ export const MetaRow = memo(function MetaRow({
           <button onClick={() => void loadFileDiff(path, { force: true })}>Load anyway</button>
         </div>
       );
+    case "unavailable":
+      return (
+        <div className="row-meta">interdiff not available — {message ?? "content not recorded"}</div>
+      );
   }
 });

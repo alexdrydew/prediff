@@ -135,6 +135,10 @@ export interface AppState {
   draftText: Readonly<Record<string, string>>;
   selection: LineSelection | null;
 
+  /** Review-level comment composer (no line anchor, QA gap §1.1). */
+  reviewComposerOpen: boolean;
+  reviewDraftText: string;
+
   /** Comment id being manually re-anchored (click a line to place it, §6.4). */
   reanchoring: string | null;
 
@@ -183,6 +187,9 @@ export const store = createStore<AppState>(() => ({
   composers: {},
   draftText: {},
   selection: null,
+
+  reviewComposerOpen: false,
+  reviewDraftText: "",
 
   reanchoring: null,
 
@@ -820,5 +827,32 @@ export async function submitComposer(key: string, tag: CommentTag | null): Promi
     });
     upsertComment(comment); // SSE will echo it; upsert dedupes by id
     closeComposer(key);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Review-level comments (QA gap §1.1): no anchor; block above the first file.
+
+/** Open the review-level composer (idempotent) and bring it into view. */
+export function openReviewComposer(): void {
+  setState({ reviewComposerOpen: true });
+}
+
+export function closeReviewComposer(): void {
+  setState({ reviewComposerOpen: false, reviewDraftText: "" });
+}
+
+export function setReviewDraftText(reviewDraftText: string): void {
+  setState({ reviewDraftText });
+}
+
+/** Create a review-level draft (POST /api/comments with no file). */
+export async function submitReviewComposer(tag: CommentTag | null): Promise<void> {
+  const text = getState().reviewDraftText.trim();
+  if (text === "") return;
+  await tracked(async () => {
+    const comment = await api.createComment({ file: null, text, tag });
+    upsertComment(comment);
+    closeReviewComposer();
   });
 }

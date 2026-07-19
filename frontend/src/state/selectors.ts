@@ -57,6 +57,7 @@ const rowsInputMemo = memoOne(
     viewMode: AppState["viewMode"],
     contextContent: AppState["contextContent"],
     contextExpansion: AppState["contextExpansion"],
+    reviewComposerOpen: boolean,
   ): RowsInput => ({
     files,
     expanded,
@@ -67,6 +68,7 @@ const rowsInputMemo = memoOne(
     viewMode,
     contextContent,
     contextExpansion,
+    reviewComposerOpen,
   }),
 );
 
@@ -82,6 +84,7 @@ export function selectRows(state: AppState): Row[] {
     state.viewMode,
     state.contextContent,
     state.contextExpansion,
+    state.reviewComposerOpen,
   );
   return rowsMemo(input);
 }

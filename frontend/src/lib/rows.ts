@@ -20,7 +20,7 @@ export interface HunkHeaderInfo {
   header: string;
 }
 
-export type MetaVariant = "binary" | "large" | "loading" | "error" | "empty";
+export type MetaVariant = "binary" | "large" | "loading" | "error" | "empty" | "unavailable";
 
 /** One unexpanded context gap ("Expand context" control, spec §3.2). */
 export interface GapInfo {
@@ -56,10 +56,15 @@ export type Row =
       counterpart?: string;
     }
   | { kind: "pair"; key: string; path: string; pair: PairedLine; hunkIdx: number }
-  | { kind: "thread"; key: string; path: string; comment: ReviewComment; detached: boolean }
+  /** path null = review-level comment (QA gap §1.1), rendered above files. */
+  | { kind: "thread"; key: string; path: string | null; comment: ReviewComment; detached: boolean }
   | { kind: "composer"; key: string; path: string; target: ComposerTarget }
   | { kind: "meta"; key: string; path: string; variant: MetaVariant; message?: string }
-  | { kind: "expand"; key: string; path: string; gap: GapInfo; hunkIdx: number };
+  | { kind: "expand"; key: string; path: string; gap: GapInfo; hunkIdx: number }
+  /** Section header of the review-level comment block (QA gap §1.1). */
+  | { kind: "review-label"; key: string; count: number }
+  /** The open review-level comment composer (no line anchor). */
+  | { kind: "review-composer"; key: string };
 
 /** Per-gap reveal state: lines shown from the gap's top / bottom edge. */
 export interface GapReveal {
@@ -78,6 +83,10 @@ export interface RowsInput {
   /** New-side full file content, fetched on first "Expand context". */
   contextContent: Readonly<Record<string, readonly string[]>>;
   contextExpansion: Readonly<Record<string, Readonly<Record<number, GapReveal>>>>;
+  /** The review-level composer is open (QA gap §1.1). */
+  reviewComposerOpen?: boolean;
+  /** Interdiff mode: path → reason its interdiff can't be served (§1.4). */
+  unavailable?: Readonly<Record<string, string>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,6 +121,19 @@ export function buildRows(input: RowsInput): Row[] {
   const rows: Row[] = [];
   const attachments = groupByFile(input.comments, input.composers);
 
+  // Review-level block (QA gap §1.1): comments about the change as a whole
+  // render in a dedicated block ABOVE the first file, GitHub-summary style.
+  const reviewComments = input.comments.filter((c) => c.file === null);
+  if (reviewComments.length > 0 || input.reviewComposerOpen === true) {
+    rows.push({ kind: "review-label", key: "review-label", count: reviewComments.length });
+    for (const comment of reviewComments) {
+      rows.push({ kind: "thread", key: `t:${comment.id}`, path: null, comment, detached: false });
+    }
+    if (input.reviewComposerOpen === true) {
+      rows.push({ kind: "review-composer", key: "review-composer" });
+    }
+  }
+
   for (const file of input.files) {
     const fileAtt = attachments.get(file.path) ?? { comments: [], composers: [] };
     const expanded = input.expanded.has(file.path);
@@ -140,6 +162,18 @@ export function buildRows(input: RowsInput): Row[] {
           detached: false,
         });
       }
+    }
+
+    const unavailableReason = input.unavailable?.[file.path];
+    if (unavailableReason !== undefined) {
+      rows.push({
+        kind: "meta",
+        key: `m:${file.path}`,
+        path: file.path,
+        variant: "unavailable",
+        message: unavailableReason,
+      });
+      continue;
     }
 
     if (file.binary) {
@@ -453,11 +487,14 @@ export function estimateRowHeight(row: Row): number {
     case "thread":
       return THREAD_ROW_ESTIMATE_PX;
     case "composer":
+    case "review-composer":
       return COMPOSER_ROW_ESTIMATE_PX;
+    case "review-label":
+      return HUNK_ROW_PX;
   }
 }
 
 /** Rows whose height varies with content and must be measured after mount. */
 export function isDynamicRow(row: Row): boolean {
-  return row.kind === "thread" || row.kind === "composer";
+  return row.kind === "thread" || row.kind === "composer" || row.kind === "review-composer";
 }

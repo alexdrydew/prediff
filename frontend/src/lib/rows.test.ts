@@ -221,6 +221,28 @@ describe("buildRows", () => {
     expect(rows[1]).toMatchObject({ detached: false });
   });
 
+  test("review-level comments render in a dedicated block above the first file", () => {
+    const rows = buildRows(
+      baseInput({
+        files: [file("a.ts")],
+        comments: [
+          comment("r1", "a.ts", 0, { file: null, kind: "review", end_line: 0 }),
+          comment("c1", "a.ts", 1),
+        ],
+      }),
+    );
+    expect(rows.map((r) => r.kind)).toEqual(["review-label", "thread", "file"]);
+    expect(rows[0]).toMatchObject({ count: 1 });
+    expect(rows[1]).toMatchObject({ path: null, comment: { id: "r1" }, detached: false });
+    // the line comment stays counted on its (collapsed) file header
+    expect(rows[2]).toMatchObject({ kind: "file", commentCount: 1 });
+  });
+
+  test("open review composer emits its row at the end of the review block", () => {
+    const rows = buildRows(baseInput({ files: [file("a.ts")], reviewComposerOpen: true }));
+    expect(rows.map((r) => r.kind)).toEqual(["review-label", "review-composer", "file"]);
+  });
+
   test("comments on collapsed files are counted on the header", () => {
     const rows = buildRows(
       baseInput({

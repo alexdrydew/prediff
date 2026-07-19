@@ -314,6 +314,7 @@ export const ThreadRow = memo(function ThreadRow({
 });
 
 function loc(comment: ReviewComment): string {
+  if (comment.file === null) return "Review comment";
   if (comment.line === 0) return `${comment.file} (file note)`;
   const range =
     comment.line === comment.end_line

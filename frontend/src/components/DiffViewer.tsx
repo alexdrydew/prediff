@@ -22,6 +22,7 @@ import { ExpandRow } from "./rows/ExpandRow";
 import { MetaRow } from "./rows/MetaRow";
 import { ThreadRow } from "./rows/ThreadRow";
 import { ComposerRow } from "./rows/ComposerRow";
+import { ReviewComposerRow } from "./rows/ReviewComposerRow";
 import { Minimap } from "./Minimap";
 
 /** Fixed per-row chrome left of the code text (two gutters + sign column). */
@@ -50,6 +51,9 @@ function rowContext(row: Row): { path: string | null; hunkIdx: number | null } {
     case "composer":
     case "meta":
       return { path: row.path, hunkIdx: null };
+    case "review-label":
+    case "review-composer":
+      return { path: null, hunkIdx: null };
   }
 }
 
@@ -242,5 +246,14 @@ const RowView = memo(function RowView({ row }: { row: Row }): ReactElement {
       return <ThreadRow comment={row.comment} detached={row.detached} />;
     case "composer":
       return <ComposerRow target={row.target} />;
+    case "review-label":
+      return (
+        <div className="review-label">
+          Review comments
+          <span className="review-label-sub">— about the change as a whole</span>
+        </div>
+      );
+    case "review-composer":
+      return <ReviewComposerRow />;
   }
 });

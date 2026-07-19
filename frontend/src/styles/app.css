@@ -1174,6 +1174,31 @@ textarea:focus {
   text-decoration: underline;
 }
 
+/* review-level comment block (QA gap §1.1) */
+.review-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 100%;
+  padding: 0 var(--space-5);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  position: sticky;
+  left: 0;
+}
+
+.review-label-sub {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-tertiary);
+}
+
 /* ═══ Comment threads (§4.2) ═══ */
 
 .row-thread,
