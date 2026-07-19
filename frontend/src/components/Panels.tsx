@@ -14,6 +14,7 @@ import {
   convertToFileNote,
   dismissOrphan,
   markReady,
+  openInterdiff,
   sendFeedback,
   useStore,
 } from "../state/store";
@@ -244,6 +245,15 @@ function HistoryPanel(): ReactElement {
                   }}
                 >
                   View
+                </button>
+              )}
+              {current !== null && r.revision < current && (
+                <button
+                  className="btn btn-s btn-sm"
+                  title={`What changed since Rev ${r.revision} — only the lines that moved between Rev ${r.revision} and Rev ${current}`}
+                  onClick={() => void openInterdiff(r.revision, current)}
+                >
+                  What changed since
                 </button>
               )}
             </div>

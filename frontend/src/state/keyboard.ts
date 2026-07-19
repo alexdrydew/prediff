@@ -8,6 +8,7 @@
 import {
   cancelReanchor,
   cancelSelection,
+  closeInterdiff,
   closePanel,
   closeSearch,
   openComposer,
@@ -89,6 +90,11 @@ export function initKeyboard(): () => void {
         e.preventDefault();
         return;
       }
+      if (s.interdiff !== null) {
+        closeInterdiff();
+        e.preventDefault();
+        return;
+      }
       if (s.reanchoring !== null) {
         cancelReanchor();
         e.preventDefault();
@@ -121,6 +127,7 @@ export function initKeyboard(): () => void {
         commentCurrent();
         break;
       case "v": {
+        if (s.interdiff !== null) break; // read-only comparison view
         const path = s.activePath;
         if (path !== null) void toggleViewed(path);
         break;

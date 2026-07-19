@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 import { memo } from "react";
 import type { ManifestFile } from "../../types";
-import { toggleFile, toggleViewed } from "../../state/store";
+import { toggleFile, toggleViewed, useStore } from "../../state/store";
 
 const STATUS_LABEL: Record<ManifestFile["status"], string> = {
   added: "added",
@@ -26,6 +26,8 @@ export const FileHeaderRow = memo(function FileHeaderRow({
   commentCount: number;
   unresolvedCount: number;
 }): ReactElement {
+  // The interdiff comparison view is read-only: no "viewed" side effects.
+  const interdiffMode = useStore((s) => s.interdiff !== null);
   return (
     <div className="row-file" onClick={() => toggleFile(file.path)}>
       <span className="twisty">{expanded ? "▾" : "▸"}</span>
@@ -44,18 +46,20 @@ export const FileHeaderRow = memo(function FileHeaderRow({
         <span className="stat-del">−{file.deletions}</span>
       </span>
       <span className="fill" />
-      <label
-        className="viewed-box"
-        onClick={(e) => e.stopPropagation()}
-        title="Mark file as viewed (v)"
-      >
-        <button
-          className={`sb-chk${viewed ? " on" : ""}`}
-          aria-label={viewed ? "Mark not viewed" : "Mark viewed"}
-          onClick={() => void toggleViewed(file.path)}
-        />
-        Viewed
-      </label>
+      {!interdiffMode && (
+        <label
+          className="viewed-box"
+          onClick={(e) => e.stopPropagation()}
+          title="Mark file as viewed (v)"
+        >
+          <button
+            className={`sb-chk${viewed ? " on" : ""}`}
+            aria-label={viewed ? "Mark not viewed" : "Mark viewed"}
+            onClick={() => void toggleViewed(file.path)}
+          />
+          Viewed
+        </label>
+      )}
     </div>
   );
 });

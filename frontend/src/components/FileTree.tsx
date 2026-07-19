@@ -9,6 +9,7 @@ import {
   toggleFile,
   toggleViewed,
   useStore,
+  type InterdiffState,
 } from "../state/store";
 import { registerFilterInput, scrollToPath } from "../state/controller";
 
@@ -91,18 +92,67 @@ const FileItem = memo(function FileItem({
   );
 });
 
+/** Sidebar contents while the interdiff comparison view is active (§1.4). */
+function InterdiffList({ mode }: { mode: InterdiffState }): ReactElement {
+  const activePath = useStore((s) => s.activePath);
+  return (
+    <div className="sb-list">
+      <div className="sb-label">
+        Changed · Rev {mode.from} → {mode.to}
+      </div>
+      {mode.manifest === null && (
+        <div className="sb-empty">{mode.status === "error" ? "Failed to load." : "Loading…"}</div>
+      )}
+      {mode.manifest?.files.map((f) => (
+        <div
+          key={f.path}
+          className={`sb-item${f.path === activePath ? " active" : ""}${f.available ? "" : " dim"}`}
+          role="button"
+          tabIndex={0}
+          onClick={() => scrollToPath(f.path)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") scrollToPath(f.path);
+          }}
+          title={
+            f.available
+              ? f.path
+              : `${f.path} — interdiff not available: ${f.reason ?? "content not recorded"}`
+          }
+        >
+          <span className="sb-name">
+            <span>{f.path}</span>
+          </span>
+          {!f.available && <span className="badge badge-muted">n/a</span>}
+          <span className="sb-stats">
+            {f.additions > 0 && <span className="sa">+{f.additions}</span>}
+            {f.deletions > 0 && <span className="sd">-{f.deletions}</span>}
+          </span>
+        </div>
+      ))}
+      {mode.manifest !== null && mode.manifest.files.length === 0 && (
+        <div className="sb-empty">
+          No content changes between Rev {mode.from} and Rev {mode.to}.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function FileTree(): ReactElement {
   const tree = useStore(selectTree);
   const width = useStore((s) => s.treeWidth);
   const filterQuery = useStore((s) => s.filterQuery);
   const activePath = useStore((s) => s.activePath);
+  const interdiff = useStore((s) => s.interdiff);
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
+  // Re-register when the input remounts (it is absent in interdiff mode).
+  const interdiffActive = interdiff !== null;
   useEffect(() => {
     registerFilterInput(inputRef.current);
     return () => registerFilterInput(null);
-  }, []);
+  }, [interdiffActive]);
 
   const startResize = (e: React.MouseEvent): void => {
     e.preventDefault();
@@ -116,6 +166,19 @@ export function FileTree(): ReactElement {
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
   };
+
+  if (interdiff !== null) {
+    return (
+      <div className="sb" style={{ width }}>
+        <InterdiffList mode={interdiff} />
+        <div
+          className={`sb-resize${dragging ? " dragging" : ""}`}
+          onMouseDown={startResize}
+          title="Drag to resize"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="sb" style={{ width }}>

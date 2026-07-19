@@ -772,6 +772,52 @@ textarea:focus {
   align-self: center;
 }
 
+/* interdiff comparison header (QA gap §1.4) */
+.interdiff-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 8px var(--space-5);
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+  background: var(--accent-primary-subtle);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent-primary) 22%, transparent);
+}
+
+.interdiff-bar .idb-title {
+  font-weight: 600;
+  color: var(--accent-primary);
+  white-space: nowrap;
+}
+
+.interdiff-bar .idb-sub {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.interdiff-bar .idb-err {
+  color: var(--status-error);
+}
+
+.interdiff-bar .idb-note {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.interdiff-bar .idb-exit {
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
+  color: var(--accent-primary);
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.interdiff-bar .idb-exit:hover {
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+}
+
 /* sticky context header (§6.2) */
 .ctx {
   display: flex;

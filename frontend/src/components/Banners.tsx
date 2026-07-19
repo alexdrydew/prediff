@@ -11,6 +11,7 @@ import {
   clearSyncError,
   dismissPendingRevision,
   loadServerState,
+  openInterdiff,
   useStore,
 } from "../state/store";
 
@@ -38,6 +39,15 @@ export function Banners(): ReactElement {
           <button className="btn btn-sm rev-go" onClick={() => void applyRevision(null)}>
             Review now
           </button>
+          {shown !== null && (
+            <button
+              className="btn btn-sm rev-stay"
+              title={`Show only the lines that changed between Rev ${shown} and Rev ${pending}`}
+              onClick={() => void openInterdiff(shown, pending)}
+            >
+              What changed since Rev {shown}
+            </button>
+          )}
           <button className="btn btn-sm rev-stay" onClick={dismissPendingRevision}>
             Keep reviewing Rev {shown}
           </button>

@@ -1,7 +1,13 @@
 /** Memoized derived state. */
 
-import type { ManifestFile } from "../types";
-import { isExpanded, type AppState, type SyncStatus } from "./store";
+import type { InterdiffManifest, ManifestFile, ReviewComment } from "../types";
+import {
+  isExpanded,
+  type AppState,
+  type FileDiffState,
+  type InterdiffState,
+  type SyncStatus,
+} from "./store";
 import { buildRows, type Row, type RowsInput } from "../lib/rows";
 import { matchesFilter, parseFilter } from "../lib/filter";
 
@@ -73,6 +79,7 @@ const rowsInputMemo = memoOne(
 );
 
 export function selectRows(state: AppState): Row[] {
+  if (state.interdiff !== null) return selectInterdiffRows(state);
   if (!state.manifest) return EMPTY_ROWS;
   const input = rowsInputMemo(
     state.manifest.files,
@@ -90,6 +97,93 @@ export function selectRows(state: AppState): Row[] {
 }
 
 const EMPTY_ROWS: Row[] = [];
+
+// ---------------------------------------------------------------------------
+// Interdiff mode (QA gap §1.4): same row machinery over synthesized inputs.
+
+/** Interdiff manifest entries as ManifestFile stubs for the row model. */
+const interdiffFilesMemo = memoOne((manifest: InterdiffManifest): ManifestFile[] =>
+  manifest.files.map((f) => ({
+    path: f.path,
+    status: "modified" as const,
+    additions: f.additions,
+    deletions: f.deletions,
+    binary: false,
+    large: false,
+  })),
+);
+
+/** path → reason for files whose interdiff can't be served. */
+const interdiffUnavailableMemo = memoOne(
+  (manifest: InterdiffManifest): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const f of manifest.files) {
+      if (!f.available) out[f.path] = f.reason ?? "content not recorded";
+    }
+    return out;
+  },
+);
+
+/** Interdiff per-file states mapped onto the row model's FileDiffState. */
+const interdiffDiffsMemo = memoOne(
+  (diffs: InterdiffState["diffs"]): Record<string, FileDiffState> => {
+    const out: Record<string, FileDiffState> = {};
+    for (const [path, d] of Object.entries(diffs)) {
+      if (d.status === "ready" && d.diff) out[path] = { status: "ready", diff: d.diff, revision: 0 };
+      else if (d.status === "error") {
+        out[path] = { status: "error", revision: 0, ...(d.error !== undefined ? { error: d.error } : {}) };
+      } else if (d.status === "loading") out[path] = { status: "loading", revision: 0 };
+      // "unavailable" renders through RowsInput.unavailable, not fileDiffs.
+    }
+    return out;
+  },
+);
+
+const interdiffExpandedMemo = memoOne(
+  (files: readonly ManifestFile[], collapsed: ReadonlySet<string>): ReadonlySet<string> => {
+    const set = new Set<string>();
+    for (const f of files) if (!collapsed.has(f.path)) set.add(f.path);
+    return set;
+  },
+);
+
+const EMPTY_COMMENTS: readonly ReviewComment[] = [];
+const EMPTY_COMPOSERS: AppState["composers"] = {};
+
+const interdiffRowsInputMemo = memoOne(
+  (
+    files: readonly ManifestFile[],
+    expanded: ReadonlySet<string>,
+    fileDiffs: Record<string, FileDiffState>,
+    viewMode: AppState["viewMode"],
+    unavailable: Record<string, string>,
+  ): RowsInput => ({
+    files,
+    expanded,
+    viewedFiles: new Set<string>(),
+    fileDiffs,
+    comments: EMPTY_COMMENTS,
+    composers: EMPTY_COMPOSERS,
+    viewMode,
+    contextContent: {},
+    contextExpansion: {},
+    unavailable,
+  }),
+);
+
+function selectInterdiffRows(state: AppState): Row[] {
+  const mode = state.interdiff;
+  if (!mode || mode.manifest === null) return EMPTY_ROWS;
+  const files = interdiffFilesMemo(mode.manifest);
+  const input = interdiffRowsInputMemo(
+    files,
+    interdiffExpandedMemo(files, mode.collapsed),
+    interdiffDiffsMemo(mode.diffs),
+    state.viewMode,
+    interdiffUnavailableMemo(mode.manifest),
+  );
+  return rowsMemo(input);
+}
 
 // ---------------------------------------------------------------------------
 // Counts
@@ -248,6 +342,7 @@ const minimapMemo = memoOne((rows: Row[]): MinimapModel => {
 });
 
 export function selectMinimap(state: AppState): MinimapModel | null {
+  if (state.interdiff !== null) return null; // comparison view keeps chrome minimal
   const manifest = state.manifest;
   if (!manifest || manifest.additions + manifest.deletions < MINIMAP_THRESHOLD) return null;
   return minimapMemo(selectRows(state));

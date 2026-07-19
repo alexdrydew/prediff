@@ -243,6 +243,21 @@ describe("buildRows", () => {
     expect(rows.map((r) => r.kind)).toEqual(["review-label", "review-composer", "file"]);
   });
 
+  test("interdiff-unavailable files render an explanatory meta row", () => {
+    const rows = buildRows(
+      baseInput({
+        files: [file("a.bin")],
+        expanded: new Set(["a.bin"]),
+        unavailable: { "a.bin": "binary file at revision 1" },
+      }),
+    );
+    expect(rows.map((r) => r.kind)).toEqual(["file", "meta"]);
+    expect(rows[1]).toMatchObject({
+      variant: "unavailable",
+      message: "binary file at revision 1",
+    });
+  });
+
   test("comments on collapsed files are counted on the header", () => {
     const rows = buildRows(
       baseInput({

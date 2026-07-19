@@ -4,7 +4,7 @@
  * (focus). Registered by the owning component on mount.
  */
 
-import { flashSearchHighlight, isExpanded, loadFileDiff, store } from "./store";
+import { closeInterdiff, flashSearchHighlight, isExpanded, loadFileDiff, store } from "./store";
 import { selectRows } from "./selectors";
 import {
   INITIAL_FOCUS,
@@ -70,6 +70,8 @@ export function currentTopIndex(): number {
  * force-load withheld large diffs, scroll to the line and flash it.
  */
 export async function jumpToSearchMatch(match: SearchMatch): Promise<void> {
+  // Search targets the shown revision's diff; leave the comparison view.
+  if (store.getState().interdiff !== null) closeInterdiff();
   const s = store.getState();
   const file = s.manifest?.files.find((f) => f.path === match.file);
   if (!file) return;

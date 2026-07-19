@@ -12,6 +12,7 @@ import type {
   CommentTag,
   DiffManifest,
   FileDiff,
+  InterdiffManifest,
   ManifestFile,
   ReviewComment,
   RevisionInfo,
@@ -19,7 +20,7 @@ import type {
   SessionState,
   Side,
 } from "../types";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type { ConnectionStatus } from "../api/sse";
 import { defaultCollapsed, hasGeneratedHeader } from "../lib/collapse";
 import type { GapReveal } from "../lib/rows";
@@ -79,6 +80,27 @@ export interface LineSelection {
   side: Side;
   anchor: number;
   head: number;
+}
+
+/** Per-file interdiff hunks state (QA gap §1.4). */
+export interface InterdiffFileDiffState {
+  status: "loading" | "ready" | "error" | "unavailable";
+  diff?: FileDiff;
+  /** Why the interdiff can't be served (status "unavailable"). */
+  reason?: string;
+  error?: string;
+}
+
+/** "What changed since Rev N" mode (QA gap §1.4). Read-only. */
+export interface InterdiffState {
+  from: number;
+  to: number;
+  status: "loading" | "ready" | "error";
+  error?: string;
+  manifest: InterdiffManifest | null;
+  diffs: Readonly<Record<string, InterdiffFileDiffState>>;
+  /** Files the user collapsed inside this view (mode-local, not persisted). */
+  collapsed: ReadonlySet<string>;
 }
 
 /** In-diff content search overlay (QA gap §1.3). */
@@ -173,6 +195,9 @@ export interface AppState {
   search: SearchState;
   searchHighlight: SearchHighlight | null;
 
+  /** Interdiff mode (QA gap §1.4); null = normal diff view. */
+  interdiff: InterdiffState | null;
+
   /** Comment id being manually re-anchored (click a line to place it, §6.4). */
   reanchoring: string | null;
 
@@ -227,6 +252,8 @@ export const store = createStore<AppState>(() => ({
 
   search: INITIAL_SEARCH,
   searchHighlight: null,
+
+  interdiff: null,
 
   reanchoring: null,
 
@@ -352,6 +379,9 @@ export async function loadServerState(): Promise<void> {
 /** Fetch hunks for one file; keeps stale content visible while reloading. */
 export async function loadFileDiff(path: string, opts?: { force?: boolean }): Promise<void> {
   const s = getState();
+  // Interdiff mode renders through the same row machinery; a "loading" meta
+  // row scrolling into view must fetch interdiff hunks, not revision hunks.
+  if (s.interdiff !== null) return loadInterdiffFile(path);
   const revision = shownRevision(s) ?? 0;
   const existing = s.fileDiffs[path];
   if (existing?.status === "loading") return;
@@ -436,6 +466,7 @@ export async function applyRevision(revision: number | null): Promise<void> {
     contextExpansion: {},
     // Search results are per-revision; stale matches must not be jumpable.
     search: { ...st.search, matches: null, truncated: false, activeIdx: 0 },
+    interdiff: null, // switching revisions exits the comparison view
   }));
   try {
     const [manifest, session] = await Promise.all([api.manifest(target), api.session()]);
@@ -639,6 +670,79 @@ export async function replyToComment(id: string, text: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Interdiff mode (QA gap §1.4): what changed BETWEEN two revisions.
+
+/** Enter interdiff mode and fetch its manifest. Read-only view. */
+export async function openInterdiff(from: number, to: number): Promise<void> {
+  if (from === to) return;
+  setState({
+    interdiff: { from, to, status: "loading", manifest: null, diffs: {}, collapsed: new Set() },
+    panel: "none",
+  });
+  try {
+    const manifest = await api.interdiffManifest(from, to);
+    setState((s) =>
+      s.interdiff?.from === from && s.interdiff.to === to
+        ? { interdiff: { ...s.interdiff, status: "ready", manifest } }
+        : {},
+    );
+  } catch (err) {
+    setState((s) =>
+      s.interdiff?.from === from && s.interdiff.to === to
+        ? {
+            interdiff: {
+              ...s.interdiff,
+              status: "error",
+              error: err instanceof Error ? err.message : String(err),
+            },
+          }
+        : {},
+    );
+  }
+}
+
+/** Exit back to the normal diff view. */
+export function closeInterdiff(): void {
+  setState({ interdiff: null });
+}
+
+/** Fetch one file's interdiff hunks (lazy, when its rows become visible). */
+export async function loadInterdiffFile(path: string): Promise<void> {
+  const s = getState();
+  const mode = s.interdiff;
+  if (mode === null || mode.manifest === null) return;
+  const existing = mode.diffs[path];
+  if (existing !== undefined && existing.status !== "error") return;
+
+  const summary = mode.manifest.files.find((f) => f.path === path);
+  const patch = (entry: InterdiffFileDiffState): void => {
+    setState((st) =>
+      st.interdiff?.from === mode.from && st.interdiff.to === mode.to
+        ? { interdiff: { ...st.interdiff, diffs: { ...st.interdiff.diffs, [path]: entry } } }
+        : {},
+    );
+  };
+  if (summary === undefined) return;
+  if (!summary.available) {
+    patch({ status: "unavailable", reason: summary.reason ?? "content not recorded" });
+    return;
+  }
+  patch({ status: "loading" });
+  try {
+    const diff = await api.interdiffFile(path, mode.from, mode.to);
+    patch({ status: "ready", diff });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // 409: content wasn't materialized at one of the revisions.
+    if (err instanceof ApiError && err.status === 409) {
+      patch({ status: "unavailable", reason: message });
+    } else {
+      patch({ status: "error", error: message });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // In-diff content search (QA gap §1.3)
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -811,6 +915,17 @@ export function setActiveContext(
 }
 
 export function toggleFile(path: string): void {
+  const mode = getState().interdiff;
+  if (mode !== null) {
+    // Mode-local collapse: never leaks into the normal view's overrides.
+    const collapsed = new Set(mode.collapsed);
+    const reopening = collapsed.has(path);
+    if (reopening) collapsed.delete(path);
+    else collapsed.add(path);
+    setState((s) => (s.interdiff !== null ? { interdiff: { ...s.interdiff, collapsed } } : {}));
+    if (reopening) void loadInterdiffFile(path);
+    return;
+  }
   setState((s) => {
     const file = s.manifest?.files.find((f) => f.path === path);
     if (!file) return {};
@@ -872,6 +987,7 @@ export async function expandContext(
 // Selection / composer actions
 
 export function beginSelection(file: string, side: Side, line: number): void {
+  if (getState().interdiff !== null) return; // read-only view (§1.4)
   setState({ selection: { file, side, anchor: line, head: line } });
   // Attach the commit listener immediately (not in a React effect) so a
   // fast click — mousedown+mouseup in the same tick — still commits.
@@ -905,6 +1021,7 @@ export function cancelSelection(): void {
 }
 
 export function openComposer(file: string, side: Side, line: number, endLine: number): void {
+  if (getState().interdiff !== null) return; // read-only view (§1.4)
   const key = composerKey(file, side, line, endLine);
   setState((s) => ({
     composers: { ...s.composers, [key]: { key, file, side, line, end_line: endLine } },
