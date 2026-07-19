@@ -120,6 +120,7 @@ export function TopBar(): ReactElement {
   const orphans = useStore(selectOrphanCount);
   const commentCount = useStore((s) => s.comments.length);
   const tree = useStore(selectTree);
+  const panel = useStore((s) => s.panel);
   const ready = session?.session_state === "ready";
 
   return (
@@ -191,8 +192,9 @@ export function TopBar(): ReactElement {
         Review comment
       </button>
       <button
-        className="btn btn-s"
+        className={`btn btn-s${panel === "ready" ? " pressed" : ""}`}
         disabled={ready}
+        aria-pressed={panel === "ready"}
         title={
           ready
             ? "Session already marked ready"
@@ -202,9 +204,12 @@ export function TopBar(): ReactElement {
       >
         Mark Ready
       </button>
+      {/* Pressed state while the confirm panel is open (QA jank §2.2): the
+          click visibly registered even though nothing is sent yet. */}
       <button
-        className="btn btn-p"
+        className={`btn btn-p${panel === "send" ? " pressed" : ""}`}
         disabled={drafts === 0}
+        aria-pressed={panel === "send"}
         title={
           drafts === 0
             ? "No draft comments to send"

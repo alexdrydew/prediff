@@ -241,7 +241,9 @@ const RowView = memo(function RowView({ row }: { row: Row }): ReactElement {
     case "expand":
       return <ExpandRow path={row.path} gap={row.gap} />;
     case "meta":
-      return <MetaRow path={row.path} variant={row.variant} message={row.message} />;
+      return (
+        <MetaRow path={row.path} variant={row.variant} message={row.message} lines={row.lines} />
+      );
     case "thread":
       return <ThreadRow comment={row.comment} detached={row.detached} />;
     case "composer":

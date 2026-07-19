@@ -59,7 +59,15 @@ export type Row =
   /** path null = review-level comment (QA gap §1.1), rendered above files. */
   | { kind: "thread"; key: string; path: string | null; comment: ReviewComment; detached: boolean }
   | { kind: "composer"; key: string; path: string; target: ComposerTarget }
-  | { kind: "meta"; key: string; path: string; variant: MetaVariant; message?: string }
+  | {
+      kind: "meta";
+      key: string;
+      path: string;
+      variant: MetaVariant;
+      message?: string;
+      /** Changed-line count, for the "large diff withheld" copy (QA §2.5). */
+      lines?: number;
+    }
   | { kind: "expand"; key: string; path: string; gap: GapInfo; hunkIdx: number }
   /** Section header of the review-level comment block (QA gap §1.1). */
   | { kind: "review-label"; key: string; count: number }
@@ -199,7 +207,13 @@ export function buildRows(input: RowsInput): Row[] {
     const diff = state.diff;
     if (!diff) continue;
     if (diff.large && diff.hunks.length === 0) {
-      rows.push({ kind: "meta", key: `m:${file.path}`, path: file.path, variant: "large" });
+      rows.push({
+        kind: "meta",
+        key: `m:${file.path}`,
+        path: file.path,
+        variant: "large",
+        lines: file.additions + file.deletions,
+      });
       continue;
     }
     if (diff.hunks.length === 0) {

@@ -139,7 +139,10 @@ describe("buildRows", () => {
   test("binary and withheld-large files show meta rows", () => {
     const rows = buildRows(
       baseInput({
-        files: [file("bin", { binary: true }), file("big", { large: true })],
+        files: [
+          file("bin", { binary: true }),
+          file("big", { large: true, additions: 6000, deletions: 1200 }),
+        ],
         expanded: new Set(["bin", "big"]),
         fileDiffs: {
           big: ready({ path: "big", binary: false, large: true, hunks: [] }),
@@ -148,7 +151,8 @@ describe("buildRows", () => {
     );
     expect(rows.map((r) => r.kind)).toEqual(["file", "meta", "file", "meta"]);
     expect(rows[1]).toMatchObject({ variant: "binary" });
-    expect(rows[3]).toMatchObject({ variant: "large" });
+    // the withheld row carries the changed-line count for its copy (QA §2.5)
+    expect(rows[3]).toMatchObject({ variant: "large", lines: 7200 });
   });
 
   test("comment thread lands directly under its anchored line", () => {
