@@ -206,6 +206,49 @@ export interface RevisionSnapshot {
   raw_diff: string;
 }
 
+/**
+ * Per-revision new-side file contents (stored gzipped alongside the revision
+ * snapshot, pruned with it) — the raw material for line-level interdiffs
+ * between revisions (QA gap §1.4).
+ */
+export interface RevisionContents {
+  revision: number;
+  /** New-side lines per changed file; null = absent on the new side (deleted). */
+  files: Record<string, string[] | null>;
+  /** path → reason content was not materialized (binary / large file). */
+  skipped: Record<string, string>;
+}
+
+// ---------------------------------------------------------------------------
+// Interdiff (what changed in a file BETWEEN two revisions, QA gap §1.4)
+
+export interface InterdiffFileSummary {
+  path: string;
+  additions: number;
+  deletions: number;
+  /** False when hunks can't be served (content not materialized at one of
+   * the revisions — binary / large file / pre-interdiff snapshot). */
+  available: boolean;
+  /** Why the interdiff is unavailable (set when available is false). */
+  reason?: string;
+}
+
+/** GET /api/interdiff/manifest?from&to */
+export interface InterdiffManifest {
+  from: number;
+  to: number;
+  /** Only files whose new-side content differs between the two revisions. */
+  files: InterdiffFileSummary[];
+  additions: number;
+  deletions: number;
+}
+
+/** GET /api/interdiff?file&from&to — same hunk shape as /api/diff/file. */
+export interface InterdiffFile extends FileDiff {
+  from: number;
+  to: number;
+}
+
 // ---------------------------------------------------------------------------
 // Daemon lockfile
 

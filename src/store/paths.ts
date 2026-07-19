@@ -43,6 +43,15 @@ export function revisionPath(stateDir_: string, sessionId: string, revision: num
   return path.join(revisionsDir(stateDir_, sessionId), `${revision}.json.gz`);
 }
 
+/** Per-revision new-side file contents (for interdiffs): <N>.files.json.gz */
+export function revisionContentsPath(
+  stateDir_: string,
+  sessionId: string,
+  revision: number,
+): string {
+  return path.join(revisionsDir(stateDir_, sessionId), `${revision}.files.json.gz`);
+}
+
 export function lockfilePath(stateDir_: string): string {
   return path.join(stateDir_, "daemon.json");
 }

@@ -3,6 +3,8 @@
  * (b) per-file structured hunks on demand. See ARCHITECTURE.md §3.
  */
 
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { git, GitError, revParse, type GitResult } from "./exec";
 import type {
@@ -181,8 +183,8 @@ export async function listUntrackedFiles(repo: string): Promise<string[]> {
   return r.stdout.split("\0").filter((p) => p.length > 0);
 }
 
-/** Bounded-concurrency map: each untracked file costs one git subprocess. */
-async function mapLimit<T, R>(
+/** Bounded-concurrency map: each item costs one git subprocess. */
+export async function mapLimit<T, R>(
   items: readonly T[],
   limit: number,
   fn: (item: T) => Promise<R>,
@@ -455,6 +457,55 @@ function sectionPath(lines: string[], start: number, end: number): string | null
   if (m) return m[1] ?? null;
   const half = /^a\/.* b\/(.*)$/.exec(header);
   return half?.[1] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Interdiff between two in-memory contents (QA gap §1.4)
+
+export interface LinesDiff {
+  hunks: Hunk[];
+  additions: number;
+  deletions: number;
+}
+
+/**
+ * Structured diff between two line arrays (null = the file is absent on that
+ * side), via `git diff --no-index` over temp files. Line numbers in the hunks
+ * are positions in the respective contents.
+ */
+export async function diffLinesNoIndex(
+  a: string[] | null,
+  b: string[] | null,
+  context = 3,
+): Promise<LinesDiff> {
+  const empty: LinesDiff = { hunks: [], additions: 0, deletions: 0 };
+  if (a === null && b === null) return empty;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "prediff-interdiff-"));
+  try {
+    const materialize = async (name: string, lines: string[] | null): Promise<string> => {
+      if (lines === null) return "/dev/null";
+      const p = path.join(dir, name);
+      await Bun.write(p, lines.length > 0 ? lines.join("\n") + "\n" : "");
+      return p;
+    };
+    const [aPath, bPath] = await Promise.all([materialize("a", a), materialize("b", b)]);
+    const args = ["diff", "--no-color", "--no-index", `--unified=${context}`, "--", aPath, bPath];
+    // --no-index exits 1 whenever the sides differ — that's success here.
+    const r = await git(dir, args, { allowFail: true });
+    if (r.code > 1) throw new GitError(args, r.code, r.stderr);
+    const { hunks } = parseUnifiedDiff(r.stdout);
+    let additions = 0;
+    let deletions = 0;
+    for (const hunk of hunks) {
+      for (const line of hunk.lines) {
+        if (line.kind === "add") additions++;
+        else if (line.kind === "del") deletions++;
+      }
+    }
+    return { hunks, additions, deletions };
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------

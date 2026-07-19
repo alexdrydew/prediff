@@ -12,10 +12,15 @@ import type {
   FeedbackBatch,
   FileContentResult,
   FileDiff,
+  InterdiffFile,
+  InterdiffFileSummary,
+  InterdiffManifest,
   ManifestFile,
   MarkReadyResult,
   OpenResult,
   ReviewComment,
+  RevisionContents,
+  RevisionSnapshot,
   RevisionsResult,
   Session,
   Side,
@@ -27,6 +32,8 @@ import {
   computeFileDiff,
   computeManifest,
   computeRawDiff,
+  diffLinesNoIndex,
+  mapLimit,
   parseUnifiedDiff,
   resolveRange,
   sideContent,
@@ -261,14 +268,46 @@ export class Daemon {
    * matches what /api/diff reports for that revision.
    */
   private async persistRevision(): Promise<void> {
-    const existing = await this.revisions.load(this.session.session_id, this.session.revision);
-    if (existing && existing.raw_diff === this.rawDiff) return;
-    await this.revisions.save(this.session.session_id, {
-      revision: this.session.revision,
-      created_at: new Date().toISOString(),
-      manifest: this.manifest,
-      raw_diff: this.rawDiff,
-    });
+    const sessionId = this.session.session_id;
+    const revision = this.session.revision;
+    const existing = await this.revisions.load(sessionId, revision);
+    const unchanged = existing !== null && existing.raw_diff === this.rawDiff;
+    if (!unchanged) {
+      await this.revisions.save(sessionId, {
+        revision,
+        created_at: new Date().toISOString(),
+        manifest: this.manifest,
+        raw_diff: this.rawDiff,
+      });
+    }
+    // New-side contents power interdiffs (§1.4); also backfill them for a
+    // snapshot written before interdiff support existed.
+    if (!unchanged || !(await this.revisions.hasContents(sessionId, revision))) {
+      await this.revisions.saveContents(sessionId, await this.captureContents(revision));
+    }
+  }
+
+  /**
+   * New-side content of every changed file in the current manifest — the raw
+   * material for interdiffs between revisions. Respects the existing
+   * large-file threshold: binary/large files are recorded as skipped and
+   * their interdiff is reported "not available".
+   */
+  private async captureContents(revision: number): Promise<RevisionContents> {
+    const files: Record<string, string[] | null> = {};
+    const skipped: Record<string, string> = {};
+    for (const f of this.manifest.files) {
+      if (f.binary) {
+        skipped[f.path] = "binary file";
+        continue;
+      }
+      if (f.large) {
+        skipped[f.path] = "large diff (content withheld for speed)";
+        continue;
+      }
+      files[f.path] = await sideContent(this.opts.repoRoot, this.range, "new", f.path);
+    }
+    return { revision, files, skipped };
   }
 
   /** Recompute the diff; bump revision + re-anchor comments if it changed. */
@@ -531,6 +570,14 @@ export class Daemon {
       return json(await this.fileDiff(file, force));
     }
 
+    if (pathname === "/api/interdiff/manifest" && method === "GET") {
+      return this.interdiffManifest(url);
+    }
+
+    if (pathname === "/api/interdiff" && method === "GET") {
+      return this.interdiffFile(url);
+    }
+
     if (pathname === "/api/comments" && method === "GET") {
       return json({ comments: this.filterComments(url) });
     }
@@ -635,6 +682,135 @@ export class Daemon {
       hunks: parsed.hunks,
     };
     if (file.old_path) result.old_path = file.old_path;
+    return json(result);
+  }
+
+  // -------------------------------------------------------------------------
+  // Interdiff: what changed in a file BETWEEN two revisions (QA gap §1.4)
+
+  /** One side's new-side lines at a revision, or why they're unavailable. */
+  private async interdiffSide(
+    snapshot: RevisionSnapshot,
+    contents: RevisionContents | null,
+    filePath: string,
+  ): Promise<{ ok: true; lines: string[] | null } | { ok: false; reason: string }> {
+    const changed = snapshot.manifest.files.some((f) => f.path === filePath);
+    if (!changed) {
+      // Untouched at this revision: the new side equals the (stable) base.
+      return { ok: true, lines: await sideContent(this.opts.repoRoot, this.range, "old", filePath) };
+    }
+    if (contents !== null) {
+      if (Object.hasOwn(contents.files, filePath)) {
+        return { ok: true, lines: contents.files[filePath] ?? null };
+      }
+      const skipReason = contents.skipped[filePath];
+      if (skipReason !== undefined) {
+        return { ok: false, reason: `${skipReason} at revision ${snapshot.revision}` };
+      }
+    }
+    return { ok: false, reason: `content not recorded for revision ${snapshot.revision}` };
+  }
+
+  /** Parse and validate ?from=&to= revision params against stored history. */
+  private async interdiffRange(
+    url: URL,
+  ): Promise<
+    | { from: RevisionSnapshot; to: RevisionSnapshot; fromC: RevisionContents | null; toC: RevisionContents | null }
+    | Response
+  > {
+    const parse = (name: string): number | Response => {
+      const raw = url.searchParams.get(name);
+      if (raw === null) return json({ error: `missing ?${name}=` }, 400);
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 1) return json({ error: `invalid ${name}: ${raw}` }, 400);
+      return n;
+    };
+    const fromN = parse("from");
+    if (fromN instanceof Response) return fromN;
+    const toN = parse("to");
+    if (toN instanceof Response) return toN;
+    if (fromN === toN) return json({ error: "from and to must differ" }, 400);
+    const sessionId = this.session.session_id;
+    const [from, to, fromC, toC] = await Promise.all([
+      this.revisions.load(sessionId, fromN),
+      this.revisions.load(sessionId, toN),
+      this.revisions.loadContents(sessionId, fromN),
+      this.revisions.loadContents(sessionId, toN),
+    ]);
+    if (!from) return json({ error: `revision not found: ${fromN}` }, 404);
+    if (!to) return json({ error: `revision not found: ${toN}` }, 404);
+    return { from, to, fromC, toC };
+  }
+
+  /** Per-file add/del counts between two revisions (files that changed). */
+  private async interdiffManifest(url: URL): Promise<Response> {
+    const range = await this.interdiffRange(url);
+    if (range instanceof Response) return range;
+    const { from, to, fromC, toC } = range;
+
+    const candidates = [
+      ...new Set([
+        ...from.manifest.files.map((f) => f.path),
+        ...to.manifest.files.map((f) => f.path),
+      ]),
+    ].sort();
+
+    const entries = await mapLimit(candidates, 8, async (p): Promise<InterdiffFileSummary | null> => {
+      const a = await this.interdiffSide(from, fromC, p);
+      const b = await this.interdiffSide(to, toC, p);
+      if (!a.ok || !b.ok) {
+        const reason = !a.ok ? a.reason : (b as { ok: false; reason: string }).reason;
+        return { path: p, additions: 0, deletions: 0, available: false, reason };
+      }
+      if (linesEqual(a.lines, b.lines)) return null; // untouched between revisions
+      const d = await diffLinesNoIndex(a.lines, b.lines);
+      if (d.hunks.length === 0) return null;
+      return { path: p, additions: d.additions, deletions: d.deletions, available: true };
+    });
+
+    const files = entries.filter((e): e is InterdiffFileSummary => e !== null);
+    const result: InterdiffManifest = {
+      from: from.revision,
+      to: to.revision,
+      files,
+      additions: files.reduce((n, f) => n + f.additions, 0),
+      deletions: files.reduce((n, f) => n + f.deletions, 0),
+    };
+    return json(result);
+  }
+
+  /** Structured hunks of one file's change between two revisions. */
+  private async interdiffFile(url: URL): Promise<Response> {
+    const filePath = url.searchParams.get("file");
+    if (!filePath) return json({ error: "missing ?file=" }, 400);
+    const range = await this.interdiffRange(url);
+    if (range instanceof Response) return range;
+    const { from, to, fromC, toC } = range;
+
+    const inEither =
+      from.manifest.files.some((f) => f.path === filePath) ||
+      to.manifest.files.some((f) => f.path === filePath);
+    if (!inEither) {
+      return json(
+        { error: `not in diff at revision ${from.revision} or ${to.revision}: ${filePath}` },
+        404,
+      );
+    }
+    const a = await this.interdiffSide(from, fromC, filePath);
+    const b = await this.interdiffSide(to, toC, filePath);
+    if (!a.ok || !b.ok) {
+      const reason = !a.ok ? a.reason : (b as { ok: false; reason: string }).reason;
+      return json({ error: `interdiff not available for ${filePath}: ${reason}`, reason }, 409);
+    }
+    const d = await diffLinesNoIndex(a.lines, b.lines);
+    const result: InterdiffFile = {
+      path: filePath,
+      from: from.revision,
+      to: to.revision,
+      binary: false,
+      large: false,
+      hunks: d.hunks,
+    };
     return json(result);
   }
 
@@ -972,6 +1148,12 @@ function parseTag(value: unknown): CommentTag | null | Response {
   if (value === undefined || value === null) return null;
   if (typeof value === "string" && COMMENT_TAGS.has(value)) return value as CommentTag;
   return json({ error: `invalid tag: ${String(value)} (must-fix|suggestion|question|nit)` }, 400);
+}
+
+/** Content equality where null means "file absent on the new side". */
+function linesEqual(a: string[] | null, b: string[] | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.length === b.length && a.every((line, i) => line === b[i]);
 }
 
 function json(value: unknown, status = 200): Response {
