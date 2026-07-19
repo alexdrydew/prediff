@@ -1530,6 +1530,95 @@ textarea:focus {
   background: var(--accent-primary-subtle);
 }
 
+/* suggested change (QA gap §1.5) — mini diff on existing diff tokens */
+.sugg {
+  margin: 6px 20px 4px 29px;
+  max-width: var(--composer-max-width);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.sugg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sugg-del-note {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.sugg-line {
+  display: flex;
+  white-space: pre;
+  overflow-x: auto;
+  line-height: 18px;
+}
+
+.sugg-line .sign {
+  flex: 0 0 18px;
+  text-align: center;
+  user-select: none;
+}
+
+.sugg-line .txt {
+  flex: 1;
+  padding-right: 8px;
+}
+
+.sugg-line.del {
+  background: var(--diff-remove-bg);
+}
+
+.sugg-line.del .sign {
+  color: var(--diff-remove-text);
+}
+
+.sugg-line.add {
+  background: var(--diff-add-bg);
+}
+
+.sugg-line.add .sign {
+  color: var(--diff-add-text);
+}
+
+/* editable while draft (composer + draft thread card) */
+.sugg-edit {
+  margin-top: 8px;
+}
+
+.cmt-edit .sugg-edit {
+  max-width: var(--composer-max-width);
+}
+
+.sugg-edit-head {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+.sugg-ta {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 18px;
+  white-space: pre;
+  tab-size: 4;
+}
+
 /* composer (§4.1) */
 .composer {
   border: 1px solid var(--accent-primary);

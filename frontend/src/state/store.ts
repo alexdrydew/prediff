@@ -616,7 +616,10 @@ const autosaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const AUTOSAVE_MS = 1_000;
 
 /** Edit a draft comment locally and autosave (debounced ~1s, spec §4.2). */
-export function editDraft(id: string, patch: { text?: string; tag?: CommentTag | null }): void {
+export function editDraft(
+  id: string,
+  patch: { text?: string; tag?: CommentTag | null; suggestion?: string | null },
+): void {
   setState((s) => ({
     comments: s.comments.map((c) => (c.id === id ? { ...c, ...patch } : c)),
   }));
@@ -628,7 +631,13 @@ export function editDraft(id: string, patch: { text?: string; tag?: CommentTag |
       autosaveTimers.delete(id);
       const comment = getState().comments.find((c) => c.id === id);
       if (!comment) return;
-      void tracked(() => api.updateComment(id, { text: comment.text, tag: comment.tag })).then(
+      void tracked(() =>
+        api.updateComment(id, {
+          text: comment.text,
+          tag: comment.tag,
+          suggestion: comment.suggestion,
+        }),
+      ).then(
         (c) => upsertComment(c),
         () => undefined, // syncError already set by tracked()
       );
@@ -644,7 +653,13 @@ export async function flushDraft(id: string): Promise<void> {
   autosaveTimers.delete(id);
   const comment = getState().comments.find((c) => c.id === id);
   if (!comment) return;
-  await tracked(() => api.updateComment(id, { text: comment.text, tag: comment.tag })).then(
+  await tracked(() =>
+    api.updateComment(id, {
+      text: comment.text,
+      tag: comment.tag,
+      suggestion: comment.suggestion,
+    }),
+  ).then(
     (c) => upsertComment(c),
     () => undefined,
   );
@@ -1044,8 +1059,13 @@ export function closeComposer(key: string): void {
 }
 
 /** Create the draft comment (spec §4.2: POST creates drafts; the agent only
- * sees it after Send Feedback). */
-export async function submitComposer(key: string, tag: CommentTag | null): Promise<void> {
+ * sees it after Send Feedback). `suggestion` is the exact replacement text
+ * for the anchored lines (QA gap §1.5), when the reviewer wrote one. */
+export async function submitComposer(
+  key: string,
+  tag: CommentTag | null,
+  suggestion: string | null = null,
+): Promise<void> {
   const target = getState().composers[key];
   const text = getState().draftText[key]?.trim();
   if (!target || !text) return;
@@ -1057,6 +1077,7 @@ export async function submitComposer(key: string, tag: CommentTag | null): Promi
       end_line: target.end_line,
       text,
       tag,
+      suggestion,
     });
     upsertComment(comment); // SSE will echo it; upsert dedupes by id
     closeComposer(key);

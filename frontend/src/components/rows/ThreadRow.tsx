@@ -50,6 +50,41 @@ export function TagChips({
   );
 }
 
+/**
+ * A concrete suggested change (QA gap §1.5) as a mini diff: the anchored
+ * lines' current text vs the reviewer's exact replacement. Read-only; the
+ * agent fetches it via `prediff suggestion <id>`.
+ */
+function SuggestionBlock({
+  current,
+  suggestion,
+}: {
+  current: readonly string[];
+  suggestion: string;
+}): ReactElement {
+  const replacement = suggestion === "" ? [] : suggestion.split("\n");
+  return (
+    <div className="sugg">
+      <div className="sugg-head">
+        Suggested change
+        {replacement.length === 0 && <span className="sugg-del-note">(removes the lines)</span>}
+      </div>
+      {current.map((t, i) => (
+        <div className="sugg-line del" key={`d${i}`}>
+          <span className="sign">−</span>
+          <span className="txt">{t}</span>
+        </div>
+      ))}
+      {replacement.map((t, i) => (
+        <div className="sugg-line add" key={`a${i}`}>
+          <span className="sign">+</span>
+          <span className="txt">{t}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const LIFE: Record<ReviewComment["state"], { cls: string; label: string }> = {
   draft: { cls: "life-draft", label: "Draft — not sent yet" },
   submitted: { cls: "life-sub", label: "Submitted" },
@@ -151,10 +186,44 @@ export const ThreadRow = memo(function ThreadRow({
                   value={comment.tag}
                   onChange={(tag) => editDraft(comment.id, { tag })}
                 />
+                {comment.kind === "line" && (
+                  <button
+                    className={`chip${comment.suggestion !== null ? " on" : ""}`}
+                    title="Write the exact replacement for the anchored lines — the agent can apply it verbatim"
+                    onClick={() =>
+                      editDraft(comment.id, {
+                        suggestion:
+                          comment.suggestion === null ? comment.anchor.lines.join("\n") : null,
+                      })
+                    }
+                  >
+                    Suggest change
+                  </button>
+                )}
               </div>
+              {comment.suggestion !== null && (
+                <div className="sugg-edit">
+                  <div className="sugg-edit-head">
+                    Replacement for the anchored line{comment.line === comment.end_line ? "" : "s"}{" "}
+                    (autosaves; empty = delete)
+                  </div>
+                  <textarea
+                    rows={Math.min(8, Math.max(2, comment.suggestion.split("\n").length))}
+                    className="sugg-ta"
+                    spellCheck={false}
+                    value={comment.suggestion}
+                    onChange={(e) => editDraft(comment.id, { suggestion: e.target.value })}
+                  />
+                </div>
+              )}
             </div>
           ) : (
-            <div className="cmt-body">{comment.text}</div>
+            <>
+              <div className="cmt-body">{comment.text}</div>
+              {comment.suggestion !== null && comment.kind === "line" && (
+                <SuggestionBlock current={comment.anchor.lines} suggestion={comment.suggestion} />
+              )}
+            </>
           )}
 
           <div className="cmt-actions">

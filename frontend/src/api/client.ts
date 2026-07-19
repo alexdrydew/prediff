@@ -64,6 +64,8 @@ export interface NewCommentRequest {
 export interface CommentPatch {
   text?: string;
   tag?: CommentTag | null;
+  /** Replacement text for the anchored lines (line comments only). */
+  suggestion?: string | null;
   /** Post-draft state changes only: resolve, or reopen back to submitted. */
   state?: Extract<CommentState, "resolved" | "submitted">;
 }
