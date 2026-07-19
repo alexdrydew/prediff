@@ -26,6 +26,11 @@ function Pane({
     if (!sel || lineNo === null || sel.file !== path || sel.side !== side) return false;
     return lineNo >= Math.min(sel.anchor, sel.head) && lineNo <= Math.max(sel.anchor, sel.head);
   });
+  // Transient flash after a content-search jump (QA gap §1.3).
+  const searchHit = useStore((s) => {
+    const h = s.searchHighlight;
+    return h !== null && h.file === path && h.side === side && lineNo === h.line;
+  });
   if (line === null || lineNo === null) {
     return (
       <span className="side empty">
@@ -39,7 +44,7 @@ function Pane({
   const marks =
     diff !== null ? changedRanges(side === "old" ? diff.old : diff.new) : undefined;
   return (
-    <span className={`side kind-${kind}${selected ? " selected" : ""}`}>
+    <span className={`side kind-${kind}${selected ? " selected" : ""}${searchHit ? " search-flash" : ""}`}>
       <span
         className="gutter"
         title="Comment on this line (drag for a range)"

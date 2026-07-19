@@ -6,9 +6,12 @@ import type {
   DiffManifest,
   FileContentResult,
   FileDiff,
+  InterdiffFile,
+  InterdiffManifest,
   MarkReadyResult,
   ReviewComment,
   RevisionsResult,
+  SearchResult,
   SendFeedbackResult,
   Session,
   Side,
@@ -142,4 +145,16 @@ export const api = {
 
   refresh: (): Promise<{ changed: boolean; revision: number }> =>
     request("/api/refresh", { method: "POST", body: "{}" }),
+
+  /** In-diff content search over hunk lines (QA gap §1.3). */
+  search: (q: string, revision: number | null = null): Promise<SearchResult> =>
+    request(`/api/search?q=${encodeURIComponent(q)}${rev(revision)}`),
+
+  /** Interdiff: files whose content changed between two revisions (§1.4). */
+  interdiffManifest: (from: number, to: number): Promise<InterdiffManifest> =>
+    request(`/api/interdiff/manifest?from=${from}&to=${to}`),
+
+  /** Interdiff hunks for one file; 409 when content wasn't materialized. */
+  interdiffFile: (file: string, from: number, to: number): Promise<InterdiffFile> =>
+    request(`/api/interdiff?file=${encodeURIComponent(file)}&from=${from}&to=${to}`),
 };

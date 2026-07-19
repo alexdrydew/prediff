@@ -6,6 +6,7 @@ import { ContextHeader } from "./components/ContextHeader";
 import { DiffViewer } from "./components/DiffViewer";
 import { KeyboardBar } from "./components/KeyboardBar";
 import { Panels } from "./components/Panels";
+import { SearchOverlay } from "./components/SearchOverlay";
 import { DisconnectedOverlay, ReadyScreen } from "./components/Overlays";
 import { useStore } from "./state/store";
 
@@ -34,6 +35,7 @@ export function App(): ReactElement {
         </main>
       </div>
       <KeyboardBar />
+      <SearchOverlay />
       <Panels />
       <DisconnectedOverlay />
     </div>

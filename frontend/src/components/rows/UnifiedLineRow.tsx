@@ -76,6 +76,12 @@ export const UnifiedLineRow = memo(function UnifiedLineRow({
       inSelection(s.selection, path, "old", line.old_line) ||
       inSelection(s.selection, path, "new", line.new_line),
   );
+  // Transient flash after a content-search jump (QA gap §1.3).
+  const searchHit = useStore((s) => {
+    const h = s.searchHighlight;
+    if (h === null || h.file !== path) return false;
+    return h.side === "new" ? line.new_line === h.line : line.old_line === h.line;
+  });
   const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
 
   let marks: Array<[number, number]> | undefined;
@@ -86,7 +92,9 @@ export const UnifiedLineRow = memo(function UnifiedLineRow({
   }
 
   return (
-    <div className={`row-line kind-${line.kind}${selected ? " selected" : ""}`}>
+    <div
+      className={`row-line kind-${line.kind}${selected ? " selected" : ""}${searchHit ? " search-flash" : ""}`}
+    >
       <Gutter path={path} side="old" line={line.old_line} />
       <Gutter path={path} side="new" line={line.new_line} />
       <span className="sign">{sign}</span>

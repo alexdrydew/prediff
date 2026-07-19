@@ -9,7 +9,9 @@ import {
   cancelReanchor,
   cancelSelection,
   closePanel,
+  closeSearch,
   openComposer,
+  openSearch,
   setPanel,
   setViewMode,
   store,
@@ -67,9 +69,23 @@ export function initKeyboard(): () => void {
   const onKeyDown = (e: KeyboardEvent): void => {
     const s = store.getState();
 
+    // Cmd/Ctrl+F opens in-diff content search (QA gap §1.3) — the browser's
+    // find can't see virtualized/collapsed rows, so it's intercepted even
+    // while typing in an input.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
+      openSearch();
+      e.preventDefault();
+      return;
+    }
+
     if (e.key === "Escape") {
       if (s.panel !== "none") {
         closePanel();
+        e.preventDefault();
+        return;
+      }
+      if (s.search.open) {
+        closeSearch();
         e.preventDefault();
         return;
       }

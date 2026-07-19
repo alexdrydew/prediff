@@ -265,6 +265,7 @@ const SHORTCUTS: ReadonlyArray<[string, string]> = [
   ["v", "Toggle “viewed” on the current file"],
   ["] / [", "Next / previous unresolved comment"],
   ["/", "Focus the file-tree filter"],
+  ["⌘/Ctrl+F", "Search diff content (all files, even collapsed)"],
   ["d", "Toggle side-by-side / unified"],
   ["?", "This overlay"],
 ];

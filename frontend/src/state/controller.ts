@@ -4,7 +4,7 @@
  * (focus). Registered by the owning component on mount.
  */
 
-import { store } from "./store";
+import { flashSearchHighlight, isExpanded, loadFileDiff, store } from "./store";
 import { selectRows } from "./selectors";
 import {
   INITIAL_FOCUS,
@@ -14,6 +14,8 @@ import {
   userScrolled,
   type FocusState,
 } from "../lib/focus";
+import { findFileRow, findMatchRow } from "../lib/search";
+import type { SearchMatch } from "../types";
 
 export interface DiffController {
   scrollToIndex(index: number, align?: "start" | "center"): void;
@@ -60,6 +62,37 @@ export function scrollToRow(index: number, align: "start" | "center" = "start"):
 
 export function currentTopIndex(): number {
   return diffController?.getTopIndex() ?? 0;
+}
+
+/**
+ * Jump to a content-search match (QA gap §1.3): expand the file if collapsed
+ * (that's the point — matches live in files whose rows don't exist yet),
+ * force-load withheld large diffs, scroll to the line and flash it.
+ */
+export async function jumpToSearchMatch(match: SearchMatch): Promise<void> {
+  const s = store.getState();
+  const file = s.manifest?.files.find((f) => f.path === match.file);
+  if (!file) return;
+
+  if (!isExpanded(s, file)) {
+    store.setState((st) => ({
+      collapsedOverride: { ...st.collapsedOverride, [match.file]: false },
+    }));
+  }
+  // Ensure hunks exist; large files withhold them until forced.
+  const dstate = store.getState().fileDiffs[match.file];
+  const withheld = dstate?.diff !== undefined && dstate.diff.large && dstate.diff.hunks.length === 0;
+  if (!dstate || dstate.status !== "ready" || withheld) {
+    await loadFileDiff(match.file, { force: file.large || withheld });
+  }
+
+  const rows = selectRows(store.getState());
+  let index = findMatchRow(rows, match);
+  if (index === -1) index = findFileRow(rows, match.file); // e.g. binary/empty
+  if (index === -1) return;
+  noteKeyboardFocus(rows[index]!.key);
+  scrollToRow(index, "center");
+  flashSearchHighlight({ file: match.file, side: match.side, line: match.line });
 }
 
 // ---------------------------------------------------------------------------

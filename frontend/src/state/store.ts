@@ -15,6 +15,7 @@ import type {
   ManifestFile,
   ReviewComment,
   RevisionInfo,
+  SearchMatch,
   SessionState,
   Side,
 } from "../types";
@@ -80,6 +81,35 @@ export interface LineSelection {
   head: number;
 }
 
+/** In-diff content search overlay (QA gap §1.3). */
+export interface SearchState {
+  open: boolean;
+  query: string;
+  /** Null until a query has produced results. */
+  matches: SearchMatch[] | null;
+  truncated: boolean;
+  activeIdx: number;
+  status: "idle" | "loading" | "error";
+  error: string | null;
+}
+
+export const INITIAL_SEARCH: SearchState = {
+  open: false,
+  query: "",
+  matches: null,
+  truncated: false,
+  activeIdx: 0,
+  status: "idle",
+  error: null,
+};
+
+/** Line to flash after a search jump (cleared on a timer). */
+export interface SearchHighlight {
+  file: string;
+  side: Side;
+  line: number;
+}
+
 export interface SessionMeta {
   session_id: string;
   range: string;
@@ -139,6 +169,10 @@ export interface AppState {
   reviewComposerOpen: boolean;
   reviewDraftText: string;
 
+  /** In-diff content search (QA gap §1.3). */
+  search: SearchState;
+  searchHighlight: SearchHighlight | null;
+
   /** Comment id being manually re-anchored (click a line to place it, §6.4). */
   reanchoring: string | null;
 
@@ -190,6 +224,9 @@ export const store = createStore<AppState>(() => ({
 
   reviewComposerOpen: false,
   reviewDraftText: "",
+
+  search: INITIAL_SEARCH,
+  searchHighlight: null,
 
   reanchoring: null,
 
@@ -392,12 +429,14 @@ export async function applyRevision(revision: number | null): Promise<void> {
   const current = s.session?.revision ?? null;
   const target = revision !== null && revision === current ? null : revision;
   const previousManifest = s.manifest;
-  setState({
+  setState((st) => ({
     viewingRevision: target,
     pendingRevision: null,
     contextContent: {}, // content is current-revision only
     contextExpansion: {},
-  });
+    // Search results are per-revision; stale matches must not be jumpable.
+    search: { ...st.search, matches: null, truncated: false, activeIdx: 0 },
+  }));
   try {
     const [manifest, session] = await Promise.all([api.manifest(target), api.session()]);
     setState((st) => ({
@@ -597,6 +636,83 @@ export async function deleteComment(id: string): Promise<void> {
 
 export async function replyToComment(id: string, text: string): Promise<void> {
   await tracked(async () => upsertComment(await api.replyToComment(id, text)));
+}
+
+// ---------------------------------------------------------------------------
+// In-diff content search (QA gap §1.3)
+
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+const SEARCH_DEBOUNCE_MS = 250;
+
+export function openSearch(): void {
+  setState((s) => ({ search: { ...s.search, open: true } }));
+}
+
+export function closeSearch(): void {
+  if (searchTimer !== null) clearTimeout(searchTimer);
+  setState((s) => ({ search: { ...s.search, open: false } }));
+}
+
+export function setSearchQuery(query: string): void {
+  setState((s) => ({ search: { ...s.search, query } }));
+  if (searchTimer !== null) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    void runSearch();
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+export function setSearchActive(activeIdx: number): void {
+  setState((s) => ({ search: { ...s.search, activeIdx } }));
+}
+
+/** Query the daemon for content matches at the shown revision. */
+export async function runSearch(): Promise<void> {
+  const q = getState().search.query.trim();
+  if (q === "") {
+    setState((s) => ({
+      search: { ...s.search, matches: null, truncated: false, activeIdx: 0, status: "idle", error: null },
+    }));
+    return;
+  }
+  setState((s) => ({ search: { ...s.search, status: "loading", error: null } }));
+  try {
+    const result = await api.search(q, getState().viewingRevision);
+    // A newer query may have superseded this response.
+    if (getState().search.query.trim() !== q) return;
+    setState((s) => ({
+      search: {
+        ...s.search,
+        matches: result.matches,
+        truncated: result.truncated,
+        activeIdx: 0,
+        status: "idle",
+        error: null,
+      },
+    }));
+  } catch (err) {
+    if (getState().search.query.trim() !== q) return;
+    setState((s) => ({
+      search: {
+        ...s.search,
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      },
+    }));
+  }
+}
+
+let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+const SEARCH_HIGHLIGHT_MS = 1_800;
+
+/** Flash the jumped-to line, then fade the marker out. */
+export function flashSearchHighlight(highlight: SearchHighlight): void {
+  if (highlightTimer !== null) clearTimeout(highlightTimer);
+  setState({ searchHighlight: highlight });
+  highlightTimer = setTimeout(() => {
+    highlightTimer = null;
+    setState({ searchHighlight: null });
+  }, SEARCH_HIGHLIGHT_MS);
 }
 
 // ---------------------------------------------------------------------------
