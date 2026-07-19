@@ -33,7 +33,7 @@
           # has zero runtime npm dependencies, so no node_modules is needed.
           prediff = pkgs.stdenvNoCC.mkDerivation {
             pname = "prediff";
-            version = "0.1.0";
+            version = "0.2.0";
             src = ./.;
 
             nativeBuildInputs = [ pkgs.makeWrapper ];
