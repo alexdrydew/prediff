@@ -18,6 +18,17 @@ export const ExpandRow = memo(function ExpandRow({
       s.interdiff !== null ||
       (s.viewingRevision !== null && s.viewingRevision !== s.session?.revision),
   );
+  const patchSource = useStore((s) => s.session?.source_kind === "patch");
+  if (patchSource) {
+    return (
+      <div className="row-expand">
+        <span>
+          {gap.hidden !== null ? `${gap.hidden} unchanged lines` : "Additional context"} is not
+          included in the patch
+        </span>
+      </div>
+    );
+  }
   if (historical) {
     return (
       <div className="row-expand">

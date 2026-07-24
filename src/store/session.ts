@@ -15,6 +15,7 @@ import {
   type CommentReply,
   type CommentTag,
   type FeedbackBatch,
+  type DiffSourceKind,
   type ReviewComment,
   type Session,
   type Side,
@@ -67,11 +68,13 @@ export class SessionStore {
     range: string,
     scope: string | null = null,
     scopeFiles: string[] | null = null,
+    sourceKind: DiffSourceKind = "git",
   ): Promise<Session> {
     const now = new Date().toISOString();
     const session: Session = {
       schema_version: SCHEMA_VERSION,
       session_id: newId("sess"),
+      source_kind: sourceKind,
       repo_root: repoRoot,
       range,
       revision: 1,
@@ -102,6 +105,7 @@ const V1_COMMENT_STATE: Record<string, ReviewComment["state"]> = {
 export function migrateSession(raw: Record<string, unknown>): Session {
   if (raw["schema_version"] === SCHEMA_VERSION) {
     const session = raw as unknown as Session;
+    session.source_kind = raw["source_kind"] === "patch" ? "patch" : "git";
     // Additive v2 field: sessions written before scope_files existed.
     session.scope_files = normalizeScopeFiles(raw["scope_files"]);
     // Additive comment fields (kind): normalize in place.
@@ -115,6 +119,7 @@ export function migrateSession(raw: Record<string, unknown>): Session {
   const session: Session = {
     schema_version: SCHEMA_VERSION,
     session_id: String(raw["session_id"] ?? newId("sess")),
+    source_kind: raw["source_kind"] === "patch" ? "patch" : "git",
     repo_root: String(raw["repo_root"] ?? ""),
     range: String(raw["range"] ?? "working"),
     revision: typeof raw["generation"] === "number" ? raw["generation"] : 1,

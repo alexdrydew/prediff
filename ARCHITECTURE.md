@@ -32,11 +32,11 @@ around its two failure modes:
 ```
 ┌────────────┐   spawn/CLI (JSON)   ┌─────────────────┐   HTTP + SSE   ┌──────────┐
 │ Coding      │ ───────────────────▶│ prediff server   │◀──────────────▶│ Browser  │
-│ agent       │◀─────────────────── │ (per-repo daemon)│                │ review UI│
+│ agent       │◀─────────────────── │(workspace daemon)│                │ review UI│
 └────────────┘    exit-immediately  └────────┬────────┘                └──────────┘
                                              │ atomic JSON writes
                                              ▼
-                                   ~/.local/share/prediff/<repo-id>/
+                                   ~/.local/share/prediff/<workspace-id>/
                                      sessions/<session-id>.json
 ```
 
@@ -51,24 +51,26 @@ needed, open browser.
 
 | Command | Behavior |
 |---|---|
-| `prediff open [range] --json` | Ensure daemon running, create (or refresh) a review session for the given diff range (`HEAD`, `working`, `staged`, `A..B`). Prints `{session_id, url, files, additions, deletions}`. |
+| `prediff open [range] --json` | Ensure daemon running, create (or refresh) a review session for the given Git diff range (`HEAD`, `working`, `staged`, `A..B`). Prints `{session_id, url, files, additions, deletions}`. |
+| `prediff open -` / `--patch FILE` | Ingest a unified diff from stdin or a file. Works outside Git and automatically creates/activates a workspace session. |
 | `prediff status --json` | Session snapshot: review state (`reviewing` / `submitted`), comment counts, diff generation number. |
 | `prediff comments --json [--unresolved]` | All comments with kind/file/line/side/text/state (drafts always excluded). |
 | `prediff suggestion <id> --json` | A comment's reviewer-authored replacement text: `{file, line, end_line, side, current_lines, suggestion}` — `current_lines` lets the agent verify the region is unchanged before applying verbatim. |
 | `prediff wait --timeout <s> --json` | Bounded long-poll: returns on review submit, new comment, or timeout — whichever first. Timeout is **safe**: state is on disk, call again. Exit code distinguishes `submitted` / `new-comments` / `timeout`. |
 | `prediff resolve <comment-id> [--reply <text>] --json` | Mark a comment addressed (with optional agent reply, shown in UI). |
-| `prediff refresh --json` | Recompute the diff (after the agent edited files); bumps generation, notifies UI via SSE. (Server also auto-watches the repo; this is the explicit hook.) |
-| `prediff stop` | Stop daemon for this repo. |
+| `prediff refresh --json` | Recompute the Git diff after edits. `--patch FILE` submits the next snapshot for a patch session. Both bump the revision and notify the UI when content changed. |
+| `prediff stop` | Stop the daemon for this workspace. |
 
-### 2. Server (per-repo daemon)
+### 2. Server (per-workspace daemon)
 
-- `Bun.serve` on a per-repo port (written to a lockfile under the state dir;
+- `Bun.serve` on a per-workspace port (written to a lockfile under the state dir;
   `open` reuses a live daemon, replaces a dead lockfile).
 - Serves the static UI, a JSON API, and an **SSE** stream (`/events`) for
   live updates (new diff generation, comment resolved by agent, agent replies).
 - Outlives the agent process (detached spawn). `--ttl` option to self-stop
   after N minutes idle (no UI or CLI activity), default a few hours.
-- Watches the repo (debounced `git status --porcelain -uall` + head hash, plus
+- For Git-backed sessions, watches the repo (debounced `git status
+  --porcelain -uall` + head hash, plus
   mtime+size of dirty paths — porcelain output alone doesn't change when an
   already-dirty file is edited again; `-uall` lists untracked files
   individually so creating/editing one, even inside an untracked directory,
@@ -76,9 +78,13 @@ needed, open browser.
 
 ### 3. Diff engine
 
-- Shells out to `git` directly (`git diff --no-color --unified=3 -z`,
+- Git sources shell out to `git` directly (`git diff --no-color --unified=3 -z`,
   `git show`, `git diff --numstat`) — no simple-git dependency; parse the
   unified diff into structured hunks.
+- Patch sources normalize portable `diff -u` and Git-extended unified input
+  into the same manifest and structured-hunk model. Their full old/new file
+  contents are intentionally unavailable unless present through another
+  source adapter.
 - Two-phase API:
   - `GET /api/diff` → manifest only: files, per-file add/del counts, rename
     status, generation number. Fast even for huge diffs.
@@ -197,9 +203,9 @@ and (via Playwright) render timings.
 
 ## Decisions made during phase-1 implementation
 
-- **One current session per repo** (open question 1): `open` with a different
-  range replaces the current session; old session files stay on disk but
-  aren't API-addressable. Revisit if multi-range review turns out to matter.
+- **One active session per workspace**, with older Git/patch sessions retained
+  on disk. `--session <id>` selects a retained session explicitly; ordinary
+  commands use the workspace's active session.
 - **Re-`open` of a ready session resets it to `reviewing`** (a new review
   round), consistent with the spec's sessions-are-resumable model (§9.1).
 - Phase-1 comment states `open`/`outdated` were superseded by the design

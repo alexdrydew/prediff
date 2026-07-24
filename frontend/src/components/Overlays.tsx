@@ -27,13 +27,15 @@ export function DisconnectedOverlay(): ReactElement | null {
 }
 
 export function ReadyScreen(): ReactElement {
+  const patchSource = useStore((s) => s.session?.source_kind === "patch");
   return (
     <div className="ready-screen">
       <div className="card">
         <div className="title">Review complete</div>
         <div className="sub">
-          You marked this review as ready. Push your changes to GitHub when you're set — that
-          step happens outside prediff.
+          {patchSource
+            ? "You marked this patch review as ready. Any next step happens in the tool that produced the diff."
+            : "You marked this review as ready. Push your changes to GitHub when you're set — that step happens outside prediff."}
         </div>
         <div className="actions">
           <button className="btn btn-s" onClick={() => void reopenSession()}>

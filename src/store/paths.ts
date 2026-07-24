@@ -1,10 +1,10 @@
-/** State-directory layout: ~/.local/share/prediff/<repo-id>/ */
+/** State-directory layout: ~/.local/share/prediff/<workspace-id>/ */
 
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 
-/** repo-id = first 12 hex chars of sha256(realpath of repo root). */
+/** workspace-id = first 12 hex chars of sha256(realpath of workspace root). */
 export async function repoId(repoRoot: string): Promise<string> {
   const real = await fs.realpath(repoRoot);
   const hasher = new Bun.CryptoHasher("sha256");
@@ -32,6 +32,11 @@ export function sessionPath(stateDir_: string, sessionId: string): string {
 
 export function currentSessionPath(stateDir_: string): string {
   return path.join(stateDir_, "current.json");
+}
+
+/** Latest normalized unified diff for a patch-backed session. */
+export function patchSourcePath(stateDir_: string, sessionId: string): string {
+  return path.join(stateDir_, "patches", `${sessionId}.diff`);
 }
 
 /** Per-session revision snapshots: <stateDir>/revisions/<session-id>/<N>.json.gz */
