@@ -13,6 +13,7 @@ import {
   type InterdiffState,
 } from "../state/store";
 import { registerFilterInput, scrollToPath } from "../state/controller";
+import { ViewedCheckbox } from "./ViewedCheckbox";
 
 const STATUS_IC: Record<FileStatus, { ch: string; cls: string }> = {
   added: { ch: "A", cls: "a" },
@@ -65,10 +66,8 @@ const FileItem = memo(function FileItem({
       }}
       title={item.file.path}
     >
-      <button
-        className={`sb-chk${item.viewed ? " on" : ""}`}
-        aria-label={item.viewed ? "Mark not viewed" : "Mark viewed"}
-        title="Viewed"
+      <ViewedCheckbox
+        viewed={item.viewed}
         onClick={(e) => {
           e.stopPropagation();
           void toggleViewed(item.file.path);

@@ -570,8 +570,10 @@ textarea:focus {
   width: 13px;
   height: 13px;
   border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  position: relative;
   border: 1.5px solid var(--border-default);
   background: transparent;
   padding: 0;
@@ -582,16 +584,19 @@ textarea:focus {
   border-color: var(--accent-primary);
 }
 
-.sb-chk.on::after {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 1px;
-  width: 5px;
-  height: 3px;
-  border-left: 1.5px solid #fff;
-  border-bottom: 1.5px solid #fff;
-  transform: rotate(-45deg);
+.sb-checkmark {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: var(--text-on-accent);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+
+.sb-chk.on .sb-checkmark {
+  opacity: 1;
 }
 
 .sb-ic {
