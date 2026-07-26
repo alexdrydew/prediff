@@ -1001,8 +1001,22 @@ textarea:focus {
 
 .row-thread,
 .row-composer {
-  position: sticky;
-  left: 0;
+  /*
+   * Diffs measures this node to size its native annotation row. Keep it in
+   * normal flow so wrap/scroll transitions and virtualization use the same
+   * layout box instead of a horizontally sticky painted box.
+   */
+  min-width: 0;
+  overflow: hidden;
+}
+
+.row-thread textarea,
+.row-composer textarea {
+  /*
+   * A native textarea resize changes DOM geometry without changing the
+   * annotation item/version, leaving Diffs' virtual height cache stale.
+   */
+  resize: none;
 }
 
 .cmt-wrap {
