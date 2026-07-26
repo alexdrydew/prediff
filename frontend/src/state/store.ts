@@ -23,7 +23,6 @@ import type {
 import { api, ApiError } from "../api/client";
 import type { ConnectionStatus } from "../api/sse";
 import { defaultCollapsed, hasGeneratedHeader } from "../lib/collapse";
-import type { GapReveal } from "../lib/rows";
 import { readPref, writePref } from "../lib/prefs";
 import type { Theme } from "../lib/theme";
 import { currentTheme } from "../lib/theme";
@@ -42,27 +41,12 @@ export interface FileDiffState {
   status: "loading" | "ready" | "error";
   /** Present when status is "ready" (kept during reload for soft refresh). */
   diff?: FileDiff;
+  /** Full sides let @pierre/diffs expand unchanged regions when available. */
+  oldContent?: string | null;
+  newContent?: string | null;
   /** Revision this diff was fetched for. */
   revision: number;
-  /** Longest line (tab-expanded chars), for sizing the horizontal canvas. */
-  maxLineChars?: number;
   error?: string;
-}
-
-/** Longest line in ch (tabs ≈ 4), capped so one absurd line can't blow up layout. */
-const MAX_CANVAS_CHARS = 400;
-
-function maxLineChars(diff: FileDiff): number {
-  let max = 0;
-  for (const hunk of diff.hunks) {
-    for (const line of hunk.lines) {
-      const tabs = line.text.includes("\t") ? line.text.split("\t").length - 1 : 0;
-      const len = line.text.length + tabs * 3;
-      if (len > max) max = len;
-      if (max >= MAX_CANVAS_CHARS) return MAX_CANVAS_CHARS;
-    }
-  }
-  return max;
 }
 
 /** Where an open comment composer is anchored. */
@@ -72,14 +56,6 @@ export interface ComposerTarget {
   side: Side;
   line: number;
   end_line: number;
-}
-
-/** In-progress line-range selection (mouse drag over the gutter). */
-export interface LineSelection {
-  file: string;
-  side: Side;
-  anchor: number;
-  head: number;
 }
 
 /** Per-file interdiff hunks state (QA gap §1.4). */
@@ -182,15 +158,11 @@ export interface AppState {
   autoCollapsed: ReadonlySet<string>;
 
   fileDiffs: Readonly<Record<string, FileDiffState>>;
-  /** New-side full content per path (expand context). */
-  contextContent: Readonly<Record<string, readonly string[]>>;
-  contextExpansion: Readonly<Record<string, Readonly<Record<number, GapReveal>>>>;
 
   /** Open composers, keyed by ComposerTarget.key — participates in row layout. */
   composers: Readonly<Record<string, ComposerTarget>>;
   /** Composer text per key — separate so typing doesn't invalidate rows. */
   draftText: Readonly<Record<string, string>>;
-  selection: LineSelection | null;
 
   /** Review-level comment composer (no line anchor, QA gap §1.1). */
   reviewComposerOpen: boolean;
@@ -209,7 +181,6 @@ export interface AppState {
   panel: Panel;
   /** File the viewport is currently inside (sticky header / tree highlight). */
   activePath: string | null;
-  activeHunk: { idx: number; count: number } | null;
 }
 
 export const composerKey = (file: string, side: Side, line: number, endLine: number): string =>
@@ -247,12 +218,9 @@ export const store = createStore<AppState>(() => ({
   autoCollapsed: new Set<string>(),
 
   fileDiffs: {},
-  contextContent: {},
-  contextExpansion: {},
 
   composers: {},
   draftText: {},
-  selection: null,
 
   reviewComposerOpen: false,
   reviewDraftText: "",
@@ -266,7 +234,6 @@ export const store = createStore<AppState>(() => ({
 
   panel: "none",
   activePath: null,
-  activeHunk: null,
 }));
 
 const { setState, getState } = store;
@@ -398,17 +365,52 @@ export async function loadFileDiff(path: string, opts?: { force?: boolean }): Pr
   setState((st) => ({
     fileDiffs: {
       ...st.fileDiffs,
-      [path]: { status: "loading", revision, ...(existing?.diff ? { diff: existing.diff } : {}) },
+      [path]: {
+        status: "loading",
+        revision,
+        ...(existing?.diff ? { diff: existing.diff } : {}),
+        ...(existing?.oldContent !== undefined ? { oldContent: existing.oldContent } : {}),
+        ...(existing?.newContent !== undefined ? { newContent: existing.newContent } : {}),
+      },
     },
   }));
   try {
     const viewing = getState().viewingRevision;
-    const diff = await api.fileDiff(path, { ...(opts ?? {}), revision: viewing });
+    const file = s.manifest?.files.find((entry) => entry.path === path);
+    const canLoadFullContent =
+      viewing === null &&
+      s.session?.source_kind === "git" &&
+      file !== undefined &&
+      !file.binary &&
+      (!file.large || opts?.force === true);
+    const loadSide = async (side: Side, absent: boolean): Promise<string | null> => {
+      if (absent) return "";
+      try {
+        return (await api.fileContent(path, side)).lines.join("\n");
+      } catch {
+        return null;
+      }
+    };
+    const [diff, contents] = await Promise.all([
+      api.fileDiff(path, { ...(opts ?? {}), revision: viewing }),
+      canLoadFullContent
+        ? Promise.all([
+            loadSide("old", file.status === "added"),
+            loadSide("new", file.status === "deleted"),
+          ])
+        : Promise.resolve<[null, null]>([null, null]),
+    ]);
     setState((st) => {
       const next: Partial<AppState> = {
         fileDiffs: {
           ...st.fileDiffs,
-          [path]: { status: "ready", diff, revision, maxLineChars: maxLineChars(diff) },
+          [path]: {
+            status: "ready",
+            diff,
+            revision,
+            oldContent: contents[0],
+            newContent: contents[1],
+          },
         },
       };
       // Header-based generated detection (spec §7.1): collapse once, unless
@@ -470,8 +472,6 @@ export async function applyRevision(revision: number | null): Promise<void> {
   setState((st) => ({
     viewingRevision: target,
     pendingRevision: null,
-    contextContent: {}, // content is current-revision only
-    contextExpansion: {},
     // Search results are per-revision; stale matches must not be jumpable.
     search: { ...st.search, matches: null, truncated: false, activeIdx: 0 },
     interdiff: null, // switching revisions exits the comparison view
@@ -942,19 +942,10 @@ export function closePanel(): void {
   setState({ panel: "none" });
 }
 
-export function setActiveContext(
-  path: string | null,
-  hunk: { idx: number; count: number } | null,
-): void {
+export function setActiveContext(path: string | null): void {
   const s = getState();
-  if (
-    s.activePath === path &&
-    s.activeHunk?.idx === hunk?.idx &&
-    s.activeHunk?.count === hunk?.count
-  ) {
-    return;
-  }
-  setState({ activePath: path, activeHunk: hunk });
+  if (s.activePath === path) return;
+  setState({ activePath: path });
 }
 
 export function toggleFile(path: string): void {
@@ -989,79 +980,7 @@ export function collapseAll(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Expand context (spec §3.2)
-
-const EXPAND_STEP = 20;
-
-export async function ensureFileContent(path: string): Promise<void> {
-  if (getState().contextContent[path] !== undefined) return;
-  try {
-    const result = await api.fileContent(path, "new");
-    setState((s) => ({ contextContent: { ...s.contextContent, [path]: result.lines } }));
-  } catch {
-    // leave unexpanded; the control stays available
-  }
-}
-
-/** Reveal more context in a gap. direction: "up" reveals above the next hunk,
- * "down" below the previous one, "all" the whole gap. */
-export async function expandContext(
-  path: string,
-  gapIndex: number,
-  direction: "up" | "down" | "all",
-): Promise<void> {
-  await ensureFileContent(path);
-  if (getState().contextContent[path] === undefined) return;
-  setState((s) => {
-    const fileExp: Record<number, GapReveal> = { ...(s.contextExpansion[path] ?? {}) };
-    const cur = fileExp[gapIndex] ?? { top: 0, bottom: 0 };
-    const next: GapReveal =
-      direction === "all"
-        ? { top: Number.MAX_SAFE_INTEGER / 4, bottom: 0 }
-        : direction === "up"
-          ? { ...cur, bottom: cur.bottom + EXPAND_STEP }
-          : { ...cur, top: cur.top + EXPAND_STEP };
-    fileExp[gapIndex] = next;
-    return { contextExpansion: { ...s.contextExpansion, [path]: fileExp } };
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Selection / composer actions
-
-export function beginSelection(file: string, side: Side, line: number): void {
-  if (getState().interdiff !== null) return; // read-only view (§1.4)
-  setState({ selection: { file, side, anchor: line, head: line } });
-  // Attach the commit listener immediately (not in a React effect) so a
-  // fast click — mousedown+mouseup in the same tick — still commits.
-  const onUp = (): void => {
-    window.removeEventListener("mouseup", onUp);
-    commitSelection();
-  };
-  window.addEventListener("mouseup", onUp);
-}
-
-export function extendSelection(file: string, side: Side, line: number): void {
-  setState((s) =>
-    s.selection && s.selection.file === file && s.selection.side === side
-      ? { selection: { ...s.selection, head: line } }
-      : {},
-  );
-}
-
-/** Finish a drag: open a composer over the selected range. */
-export function commitSelection(): void {
-  const { selection } = getState();
-  if (!selection) return;
-  const line = Math.min(selection.anchor, selection.head);
-  const endLine = Math.max(selection.anchor, selection.head);
-  openComposer(selection.file, selection.side, line, endLine);
-  setState({ selection: null });
-}
-
-export function cancelSelection(): void {
-  setState({ selection: null });
-}
+// Composer actions
 
 export function openComposer(file: string, side: Side, line: number, endLine: number): void {
   if (getState().interdiff !== null) return; // read-only view (§1.4)

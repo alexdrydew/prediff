@@ -1,4 +1,6 @@
 import { createRoot } from "react-dom/client";
+import { WorkerPoolContextProvider } from "@pierre/diffs/react";
+import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
 import { App } from "./App";
 import { connectEvents } from "./api/sse";
 import { applyServerEvent } from "./state/events";
@@ -22,4 +24,19 @@ connectEvents("/events", {
 
 const container = document.getElementById("root");
 if (!container) throw new Error("missing #root");
-createRoot(container).render(<App />);
+createRoot(container).render(
+  <WorkerPoolContextProvider
+    poolOptions={{
+      workerFactory: () => new DiffsWorker(),
+      poolSize: Math.min(4, Math.max(2, (navigator.hardwareConcurrency || 4) - 1)),
+    }}
+    highlighterOptions={{
+      theme: { dark: "pierre-dark", light: "pierre-light" },
+      lineDiffType: "word-alt",
+      tokenizeMaxLineLength: 4_000,
+      maxLineDiffLength: 1_000,
+    }}
+  >
+    <App />
+  </WorkerPoolContextProvider>,
+);

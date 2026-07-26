@@ -1,7 +1,8 @@
 import type { ReactElement } from "react";
-import { memo, useEffect } from "react";
-import type { MetaVariant } from "../../lib/rows";
+import { memo } from "react";
 import { loadFileDiff } from "../../state/store";
+
+export type MetaVariant = "binary" | "large" | "loading" | "error" | "empty" | "unavailable";
 
 export const MetaRow = memo(function MetaRow({
   path,
@@ -14,13 +15,6 @@ export const MetaRow = memo(function MetaRow({
   message?: string | undefined;
   lines?: number | undefined;
 }): ReactElement {
-  // Files are expanded by default but their hunks load lazily: this row only
-  // mounts when it scrolls into the virtualizer window, so kicking the fetch
-  // here gives render-on-demand for free (spec §7.4).
-  useEffect(() => {
-    if (variant === "loading") void loadFileDiff(path);
-  }, [variant, path]);
-
   switch (variant) {
     case "binary":
       return <div className="row-meta">binary file — no textual diff</div>;
@@ -45,7 +39,7 @@ export const MetaRow = memo(function MetaRow({
             withheld for speed —
           </span>
           <button onClick={() => void loadFileDiff(path, { force: true })}>Load anyway</button>
-          <span className="meta-note">Files over 5,000 changed lines load on demand.</span>
+          <span className="meta-note">Files over 20,000 changed lines load on demand.</span>
         </div>
       );
     case "unavailable":

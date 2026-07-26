@@ -3,7 +3,6 @@ import { TopBar } from "./components/TopBar";
 import { FileTree } from "./components/FileTree";
 import { Banners } from "./components/Banners";
 import { InterdiffBar } from "./components/InterdiffBar";
-import { ContextHeader } from "./components/ContextHeader";
 import { DiffViewer } from "./components/DiffViewer";
 import { KeyboardBar } from "./components/KeyboardBar";
 import { Panels } from "./components/Panels";
@@ -30,7 +29,6 @@ export function App(): ReactElement {
           ) : (
             <>
               <InterdiffBar />
-              <ContextHeader />
               <DiffViewer />
             </>
           )}

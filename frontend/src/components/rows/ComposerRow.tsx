@@ -20,7 +20,9 @@ async function currentLinesText(target: ComposerTarget): Promise<string> {
   const s = store.getState();
   const local = suggestionPrefill(
     s.fileDiffs[target.file]?.diff?.hunks,
-    target.side === "new" ? s.contextContent[target.file] : undefined,
+    target.side === "new"
+      ? s.fileDiffs[target.file]?.newContent?.split("\n")
+      : s.fileDiffs[target.file]?.oldContent?.split("\n"),
     target.side,
     target.line,
     target.end_line,

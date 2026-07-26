@@ -21,8 +21,12 @@ import type {
 /** git's well-known empty tree object; lets us diff against "nothing". */
 export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-/** Per-file line-count threshold above which hunks are withheld by default. */
-export const LARGE_FILE_LINES = 5_000;
+/**
+ * Per-file line-count threshold above which hunks are withheld by default.
+ * The virtualized Diffs renderer handles 10k-line changes comfortably; keep
+ * the escape hatch only for substantially larger inputs.
+ */
+export const LARGE_FILE_LINES = 20_000;
 
 /** Detect renames, keep output deterministic. */
 const DIFF_FLAGS = ["--no-color", "-M"] as const;

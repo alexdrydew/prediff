@@ -167,11 +167,16 @@ The review model follows the design spec (`design/prediff-interaction-spec.md`
 
 - Vite + React + TypeScript (familiar ecosystem; perf comes from
   architecture, not framework).
-- **Virtualized rendering** (@tanstack/react-virtual): only visible lines are
-  in the DOM. Files render as collapsed headers first; content loads on
+- **Virtualized rendering** (`@pierre/diffs` `CodeView`): files and lines share
+  one virtual surface, so only the viewport and a small overscan window are in
+  the DOM. Files render as collapsed headers first; content loads on
   expand/scroll.
-- **Syntax highlighting off the main thread**, viewport-only, in a Web Worker
-  (Shiki lazy-loaded per-language, or highlight.js if bundle size wins).
+- **Syntax highlighting and word-level diffs off the main thread** through a
+  bounded `@pierre/diffs` worker pool. Tokenization is capped for pathological
+  long lines.
+- `@pierre/diffs` also owns patch parsing, split/unified layout, unchanged-line
+  expansion, selection, and sticky headers. Prediff keeps only product state:
+  sessions, comments, viewed files, search, and agent feedback.
 - SSE-driven live updates: new generation → soft refresh preserving scroll
   position and draft comments (re-anchored).
 - No comment state in localStorage — the server is the source of truth;
@@ -188,7 +193,7 @@ the loop:
 3. On comments: fix code → `prediff refresh` → `prediff resolve <id> --reply …`.
 4. Repeat until review submitted with zero unresolved comments.
 
-## Performance targets (vs difit, measured)
+## Performance targets
 
 | Metric | Target |
 |---|---|
@@ -200,6 +205,11 @@ the loop:
 Benchmark harness: `bench/` generates synthetic repos with parameterized diff
 sizes; runs both prediff and difit headless, measures server response times
 and (via Playwright) render timings.
+
+The Diffs migration acceptance check uses a single TypeScript file with
+10,000 changed lines (+5,000/−5,000). On the development machine it reached
+rendered code in 444 ms, represented a 200,932 px virtual canvas, and kept
+only 160 line nodes mounted for a 644 px viewport.
 
 ## Decisions made during phase-1 implementation
 

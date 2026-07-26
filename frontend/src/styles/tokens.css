@@ -93,20 +93,8 @@
   --status-success: #1a7f37;
   --status-success-bg: #e9f5ec;
 
-  --code-block-bg: #16181f;
-  --code-block-text: #e6e8eb;
-
   --overlay-scrim: rgba(255, 255, 255, 0.6);
   --shadow-panel: 0 8px 32px rgba(13, 15, 20, 0.14);
-
-  /* syntax (highlight.js hooks) — muted, low-saturation */
-  --hl-keyword: #a4335a;
-  --hl-string: #0a5a8c;
-  --hl-comment: #8b93a1;
-  --hl-number: #6f42c1;
-  --hl-title: #7c4dff;
-  --hl-attr: #92551c;
-  --hl-literal: #205ea6;
 }
 
 :root[data-theme="dark"] {
@@ -158,17 +146,6 @@
   --status-success: #4ade80;
   --status-success-bg: #10261a;
 
-  --code-block-bg: #16181f;
-  --code-block-text: #e6e8eb;
-
   --overlay-scrim: rgba(10, 11, 13, 0.6);
   --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.5);
-
-  --hl-keyword: #e58fa9;
-  --hl-string: #8fc7f3;
-  --hl-comment: #676f7d;
-  --hl-number: #c0a6f5;
-  --hl-title: #b9a6ff;
-  --hl-attr: #e0b184;
-  --hl-literal: #79b8ff;
 }

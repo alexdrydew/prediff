@@ -10,7 +10,7 @@
  *   - `prediff status` CLI round-trip
  *
  * Usage: bun bench/bench.ts [--lines 10000] [--files 20] [--keep]
- * Browser render timings (Playwright) come later, with the real frontend.
+ * Browser render and scroll timings live in compare.ts.
  */
 
 import fs from "node:fs/promises";

@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { InterdiffFile, InterdiffManifest } from "../src/types";
+import { LARGE_FILE_LINES } from "../src/git/diff";
 import { Daemon } from "../src/server/server";
 import { HISTORY_MAX, RevisionStore } from "../src/store/revisions";
 import { cleanup, commitAll, initRepo, tempDir, write } from "./helpers";
@@ -149,7 +150,8 @@ describe("GET /api/interdiff (single file)", () => {
 
   test("files whose content wasn't materialized (large) are 409/flagged", async () => {
     // An untracked file over the large threshold: content is never stored.
-    const big = Array.from({ length: 5_001 }, (_, i) => `line ${i}`).join("\n") + "\n";
+    const big =
+      Array.from({ length: LARGE_FILE_LINES + 1 }, (_, i) => `line ${i}`).join("\n") + "\n";
     await write(repo, "big.txt", big);
     expect(await refresh()).toBe(4);
 

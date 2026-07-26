@@ -1,13 +1,7 @@
-/**
- * Global keyboard model — exactly the spec §8 table, nothing more:
- *   j/k hunks · n/p files · c comment · Cmd/Ctrl+Enter submit (composer-local)
- *   Esc cancel/close · v viewed · ]/[ unresolved comments · / filter ·
- *   d view toggle · w wrap toggle · ? shortcut overlay
- */
+/** Global review shortcuts, backed by @pierre/diffs' item/line scroll API. */
 
 import {
   cancelReanchor,
-  cancelSelection,
   closeInterdiff,
   closePanel,
   closeSearch,
@@ -19,10 +13,16 @@ import {
   toggleViewed,
   toggleWrapLines,
 } from "./store";
-import { selectRows } from "./selectors";
-import { currentFocusIndex, focusFilter, noteKeyboardFocus, scrollToRow } from "./controller";
-import { findRowIndex } from "../lib/focus";
-import type { Row } from "../lib/rows";
+import { selectOrderedFiles } from "./selectors";
+import {
+  clearDiffSelection,
+  currentLocation,
+  focusFilter,
+  scrollToLocation,
+  scrollToPath,
+  type DiffLocation,
+} from "./controller";
+import type { FileDiff, Side } from "../types";
 
 function isEditable(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -30,121 +30,143 @@ function isEditable(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
-/** Jump relative to the current focus anchor (mouse-synced, QA F4) — never
- * from a possibly-stale viewport read — and move the anchor to the target. */
-function jump(dir: 1 | -1, match: (row: Row) => boolean, align: "start" | "center" = "start"): void {
-  const rows = selectRows(store.getState());
-  const index = findRowIndex(rows, currentFocusIndex(), dir, match);
-  if (index !== -1) {
-    noteKeyboardFocus(rows[index]!.key);
-    scrollToRow(index, align);
-  }
+function filePaths(): string[] {
+  const state = store.getState();
+  return state.interdiff?.manifest
+    ? state.interdiff.manifest.files.map((file) => file.path)
+    : selectOrderedFiles(state).map((file) => file.path);
 }
 
-/** Comment on the currently-focused row (spec §8 `c`): the anchor set by the
- * last keyboard jump / mouse interaction, falling back to the viewport top. */
-function commentCurrent(): void {
-  const rows = selectRows(store.getState());
-  const top = currentFocusIndex();
-  // Find the first code line at/after the current row (skipping backwards to
-  // the hunk if we're on a header).
-  for (let i = Math.max(0, top); i < rows.length; i++) {
-    const row = rows[i]!;
-    if (row.kind === "line") {
-      const side = row.line.new_line !== null ? "new" : "old";
-      const n = side === "new" ? row.line.new_line! : row.line.old_line!;
-      openComposer(row.path, side, n, n);
-      return;
-    }
-    if (row.kind === "pair") {
-      const line = row.pair.right ?? row.pair.left;
-      if (!line) continue;
-      const side = line.new_line !== null ? "new" : "old";
-      const n = side === "new" ? line.new_line! : line.old_line!;
-      openComposer(row.path, side, n, n);
-      return;
+function jumpFile(direction: 1 | -1): void {
+  const state = store.getState();
+  const paths = filePaths();
+  const current = state.activePath ? paths.indexOf(state.activePath) : -1;
+  const index = current === -1 ? (direction === 1 ? 0 : paths.length - 1) : current + direction;
+  const path = paths[index];
+  if (path) scrollToPath(path);
+}
+
+function loadedDiff(path: string): FileDiff | undefined {
+  const state = store.getState();
+  if (state.interdiff) return state.interdiff.diffs[path]?.diff;
+  return state.fileDiffs[path]?.diff;
+}
+
+function hunkTargets(): DiffLocation[] {
+  const targets: DiffLocation[] = [];
+  for (const path of filePaths()) {
+    for (const hunk of loadedDiff(path)?.hunks ?? []) {
+      const side: Side = hunk.new_lines > 0 ? "new" : "old";
+      targets.push({
+        file: path,
+        side,
+        line: side === "new" ? hunk.new_start : hunk.old_start,
+      });
     }
   }
+  return targets;
+}
+
+function locationOrder(location: DiffLocation): number {
+  const paths = filePaths();
+  return paths.indexOf(location.file) * 1_000_000_000 + location.line;
+}
+
+function jumpLocation(direction: 1 | -1, targets: DiffLocation[]): void {
+  const state = store.getState();
+  const current =
+    currentLocation() ??
+    (state.activePath ? { file: state.activePath, side: "new" as const, line: 0 } : null);
+  const ordered = targets.slice().sort((a, b) => locationOrder(a) - locationOrder(b));
+  const target =
+    direction === 1
+      ? ordered.find((candidate) => !current || locationOrder(candidate) > locationOrder(current))
+      : ordered
+          .slice()
+          .reverse()
+          .find((candidate) => !current || locationOrder(candidate) < locationOrder(current));
+  if (target) scrollToLocation(target);
+}
+
+function unresolvedTargets(): DiffLocation[] {
+  return store
+    .getState()
+    .comments.filter(
+      (comment) => comment.file !== null && comment.line > 0 && comment.state !== "resolved",
+    )
+    .map((comment) => ({ file: comment.file!, side: comment.side, line: comment.line }));
+}
+
+function commentCurrent(): void {
+  const state = store.getState();
+  let location = currentLocation();
+  if (!location && state.activePath) {
+    const hunk = loadedDiff(state.activePath)?.hunks[0];
+    if (hunk) {
+      const side: Side = hunk.new_lines > 0 ? "new" : "old";
+      location = {
+        file: state.activePath,
+        side,
+        line: side === "new" ? hunk.new_start : hunk.old_start,
+      };
+    }
+  }
+  if (location) openComposer(location.file, location.side, location.line, location.line);
 }
 
 export function initKeyboard(): () => void {
-  const onKeyDown = (e: KeyboardEvent): void => {
-    const s = store.getState();
-
-    // Cmd/Ctrl+F opens in-diff content search (QA gap §1.3) — the browser's
-    // find can't see virtualized/collapsed rows, so it's intercepted even
-    // while typing in an input.
-    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f") {
+  const onKeyDown = (event: KeyboardEvent): void => {
+    const state = store.getState();
+    if (
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === "f"
+    ) {
       openSearch();
-      e.preventDefault();
+      event.preventDefault();
       return;
     }
-
-    if (e.key === "Escape") {
-      if (s.panel !== "none") {
-        closePanel();
-        e.preventDefault();
-        return;
-      }
-      if (s.search.open) {
-        closeSearch();
-        e.preventDefault();
-        return;
-      }
-      if (s.interdiff !== null) {
-        closeInterdiff();
-        e.preventDefault();
-        return;
-      }
-      if (s.reanchoring !== null) {
-        cancelReanchor();
-        e.preventDefault();
-        return;
-      }
-      if (s.selection !== null) {
-        cancelSelection();
-        return;
-      }
+    if (event.key === "Escape") {
+      if (state.panel !== "none") closePanel();
+      else if (state.search.open) closeSearch();
+      else if (state.interdiff !== null) closeInterdiff();
+      else if (state.reanchoring !== null) cancelReanchor();
+      else clearDiffSelection();
       return;
     }
+    if (isEditable(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
 
-    if (isEditable(e.target)) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-
-    switch (e.key) {
+    switch (event.key) {
       case "j":
-        jump(1, (r) => r.kind === "hunk");
+        jumpLocation(1, hunkTargets());
         break;
       case "k":
-        jump(-1, (r) => r.kind === "hunk");
+        jumpLocation(-1, hunkTargets());
         break;
       case "n":
-        jump(1, (r) => r.kind === "file");
+        jumpFile(1);
         break;
       case "p":
-        jump(-1, (r) => r.kind === "file");
+        jumpFile(-1);
         break;
       case "c":
         commentCurrent();
         break;
-      case "v": {
-        if (s.interdiff !== null) break; // read-only comparison view
-        const path = s.activePath;
-        if (path !== null) void toggleViewed(path);
+      case "v":
+        if (state.interdiff === null && state.activePath) void toggleViewed(state.activePath);
         break;
-      }
       case "]":
-        jump(1, (r) => r.kind === "thread" && r.comment.state !== "resolved", "center");
+        jumpLocation(1, unresolvedTargets());
         break;
       case "[":
-        jump(-1, (r) => r.kind === "thread" && r.comment.state !== "resolved", "center");
+        jumpLocation(-1, unresolvedTargets());
         break;
       case "/":
         focusFilter();
-        e.preventDefault();
         break;
       case "d":
-        setViewMode(s.viewMode === "unified" ? "split" : "unified");
+        setViewMode(state.viewMode === "unified" ? "split" : "unified");
         break;
       case "w":
         toggleWrapLines();
@@ -155,9 +177,8 @@ export function initKeyboard(): () => void {
       default:
         return;
     }
-    e.preventDefault();
+    event.preventDefault();
   };
-
   window.addEventListener("keydown", onKeyDown);
   return () => window.removeEventListener("keydown", onKeyDown);
 }
