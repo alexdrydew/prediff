@@ -1,311 +1,460 @@
-import type { ReactElement } from "react";
-/**
- * The single virtualized list every review renders through. One virtualizer
- * windows over the flat row model (file headers, hunks, lines, threads,
- * composers, expand controls), keeping DOM size bounded regardless of diff
- * size. Also owns viewport tracking for the sticky context header (§6.2) and
- * the tree ↔ panel scroll sync (§7.2).
- */
-
-import { memo, useCallback, useEffect, useRef } from "react";
-import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
-import { selectRows } from "../state/selectors";
-import { setActiveContext, store, useStore } from "../state/store";
-import { noteRowInteraction, noteScroll, registerDiffController } from "../state/controller";
-import { estimateRowHeight, isDynamicRow, type Row } from "../lib/rows";
-import { languageForPath } from "../lib/language";
-import { FileHeaderRow } from "./rows/FileHeaderRow";
-import { HunkHeaderRow } from "./rows/HunkHeaderRow";
-import { UnifiedLineRow } from "./rows/UnifiedLineRow";
-import { SplitLineRow } from "./rows/SplitLineRow";
-import { ExpandRow } from "./rows/ExpandRow";
-import { MetaRow } from "./rows/MetaRow";
+import {
+  CodeView,
+  type CodeViewHandle,
+} from "@pierre/diffs/react";
+import type {
+  CodeViewItem,
+  CodeViewOptions,
+  DiffLineAnnotation,
+  LineAnnotation,
+  OnDiffLineClickProps,
+  OnLineClickProps,
+  SelectedLineRange,
+} from "@pierre/diffs";
+import { useEffect, useMemo, useRef, type ReactElement } from "react";
+import type { ManifestFile, ReviewComment, Side } from "../types";
+import { lineInDiff, pierreFileDiff } from "../lib/diffs";
+import { selectExpanded, selectOrderedFiles } from "../state/selectors";
+import {
+  loadFileDiff,
+  openComposer,
+  reanchorTo,
+  setActiveContext,
+  shownRevision,
+  store,
+  toggleFile,
+  toggleViewed,
+  useStore,
+  type ComposerTarget,
+  type FileDiffState,
+} from "../state/store";
+import {
+  noteActiveLine,
+  registerDiffController,
+  type DiffLocation,
+} from "../state/controller";
+import { ViewedCheckbox } from "./ViewedCheckbox";
 import { ThreadRow } from "./rows/ThreadRow";
 import { ComposerRow } from "./rows/ComposerRow";
 import { ReviewComposerRow } from "./rows/ReviewComposerRow";
-import { Minimap } from "./Minimap";
+import { MetaRow, type MetaVariant } from "./rows/MetaRow";
 
-/** Fixed per-row chrome left of the code text (two gutters + sign column). */
-const ROW_CHROME_PX = 120;
+const REVIEW_ID = "\0review";
 
-function selectCanvasChars(state: Parameters<typeof selectRows>[0]): number {
-  let max = 80;
-  for (const path in state.fileDiffs) {
-    const chars = state.fileDiffs[path]?.maxLineChars ?? 0;
-    if (chars > max) max = chars;
-  }
-  return max;
+type Annotation =
+  | { kind: "comment"; comment: ReviewComment; detached: boolean }
+  | { kind: "composer"; target: ComposerTarget }
+  | { kind: "review-composer" }
+  | { kind: "meta"; path: string; variant: MetaVariant; message?: string; lines?: number };
+
+type ItemContext = { item: CodeViewItem<Annotation> };
+type AnyLineClick = OnDiffLineClickProps | OnLineClickProps;
+
+interface ViewerFile {
+  file: ManifestFile;
+  state: FileDiffState | undefined;
+  expanded: boolean;
+  unavailable?: string;
 }
 
-/** Which file/hunk a row belongs to, for the sticky header. */
-function rowContext(row: Row): { path: string | null; hunkIdx: number | null } {
-  switch (row.kind) {
-    case "file":
-      return { path: row.file.path, hunkIdx: null };
-    case "hunk":
-    case "line":
-    case "pair":
-    case "expand":
-      return { path: row.path, hunkIdx: row.hunkIdx };
-    case "thread":
-    case "composer":
-    case "meta":
-      return { path: row.path, hunkIdx: null };
-    case "review-label":
-    case "review-composer":
-      return { path: null, hunkIdx: null };
-  }
+const versions = new Map<string, { signature: string; value: number }>();
+
+function itemVersion(id: string, signature: string): number {
+  const current = versions.get(id);
+  if (current?.signature === signature) return current.value;
+  const value = (current?.value ?? 0) + 1;
+  versions.set(id, { signature, value });
+  return value;
 }
 
 export function DiffViewer(): ReactElement {
-  const rows = useStore(selectRows);
-  const viewMode = useStore((s) => s.viewMode);
-  const wrapLines = useStore((s) => s.wrapLines);
-  const canvasChars = useStore(selectCanvasChars);
-  const parentRef = useRef<HTMLDivElement>(null);
-  const topIndexRef = useRef(0);
-  const rowsRef = useRef(rows);
-  rowsRef.current = rows;
+  const ref = useRef<CodeViewHandle<Annotation>>(null);
+  const orderedFiles = useStore(selectOrderedFiles);
+  const normalExpanded = useStore(selectExpanded);
+  const fileDiffs = useStore((state) => state.fileDiffs);
+  const comments = useStore((state) => state.comments);
+  const composers = useStore((state) => state.composers);
+  const reviewComposerOpen = useStore((state) => state.reviewComposerOpen);
+  const interdiff = useStore((state) => state.interdiff);
+  const viewMode = useStore((state) => state.viewMode);
+  const wrapLines = useStore((state) => state.wrapLines);
+  const theme = useStore((state) => state.theme);
+  const session = useStore((state) => state.session);
+  const viewingRevision = useStore((state) => shownRevision(state));
+  const searchHighlight = useStore((state) => state.searchHighlight);
 
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: (index) => {
-      const row = rows[index];
-      return row ? estimateRowHeight(row) : 22;
-    },
-    getItemKey: (index) => rows[index]?.key ?? index,
-    overscan: 12,
-  });
-  const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element>>(virtualizer);
-  virtualizerRef.current = virtualizer;
+  const files = useMemo<ViewerFile[]>(() => {
+    if (interdiff?.manifest) {
+      return interdiff.manifest.files.map((summary) => {
+        const state = interdiff.diffs[summary.path];
+        return {
+          file: {
+            path: summary.path,
+            status: "modified",
+            additions: summary.additions,
+            deletions: summary.deletions,
+            binary: false,
+            large: false,
+          },
+          state:
+            state?.status === "ready" && state.diff
+              ? { status: "ready", diff: state.diff, revision: 0 }
+              : state?.status === "error"
+                ? { status: "error", revision: 0, error: state.error }
+                : state?.status === "loading"
+                  ? { status: "loading", revision: 0 }
+                  : undefined,
+          expanded: !interdiff.collapsed.has(summary.path),
+          ...(!summary.available
+            ? { unavailable: summary.reason ?? "content not recorded" }
+            : {}),
+        };
+      });
+    }
+    return orderedFiles.map((file) => ({
+      file,
+      state: fileDiffs[file.path],
+      expanded: normalExpanded.has(file.path),
+    }));
+  }, [fileDiffs, interdiff, normalExpanded, orderedFiles]);
 
-  /** Row index at the top of the viewport, computed synchronously from the
-   * scroll offset (never from a cached value — scroll events and rAF can lag
-   * behind programmatic scrolling). */
-  const computeTopIndex = useCallback((): number => {
-    const el = parentRef.current;
-    if (!el) return 0;
-    const top = el.scrollTop + 2;
-    const items = virtualizerRef.current.getVirtualItems();
-    const current = items.find((it) => it.end > top) ?? items[items.length - 1];
-    return current ? current.index : 0;
-  }, []);
+  const items = useMemo<CodeViewItem<Annotation>[]>(() => {
+    const result: CodeViewItem<Annotation>[] = [];
+    const reviewComments = comments.filter((comment) => comment.file === null);
+    if (reviewComments.length > 0 || reviewComposerOpen) {
+      const annotations: LineAnnotation<Annotation>[] = reviewComments.map((comment) => ({
+        lineNumber: 0,
+        metadata: { kind: "comment", comment, detached: false },
+      }));
+      if (reviewComposerOpen) {
+        annotations.push({ lineNumber: 0, metadata: { kind: "review-composer" } });
+      }
+      result.push({
+        id: REVIEW_ID,
+        type: "file",
+        file: { name: "Review comments", contents: "" },
+        annotations,
+        version: itemVersion(
+          REVIEW_ID,
+          `${reviewComments.map(commentSignature).join("|")}:${reviewComposerOpen}`,
+        ),
+      });
+    }
 
-  // Viewport tracking: which row is at the top → sticky header + tree sync.
-  const updateContext = useCallback((): void => {
-    const el = parentRef.current;
-    if (!el) return;
-    const top = el.scrollTop + 2;
-    const items = virtualizerRef.current.getVirtualItems();
-    let current = items.find((it) => it.end > top) ?? items[items.length - 1];
-    if (!current) {
-      setActiveContext(null, null);
-      return;
+    for (const entry of files) {
+      const { file, state } = entry;
+      const fileComments = comments.filter((comment) => comment.file === file.path);
+      const fileComposers = Object.values(composers).filter(
+        (composer) => composer.file === file.path,
+      );
+      const annotations: DiffLineAnnotation<Annotation>[] = [];
+      const complete =
+        typeof state?.oldContent === "string" && typeof state.newContent === "string";
+      for (const comment of fileComments) {
+        const visible =
+          comment.line > 0 &&
+          comment.state !== "orphaned" &&
+          (complete || lineInDiff(state?.diff, comment.side, comment.line));
+        annotations.push({
+          side: visible ? pierreSide(comment.side) : fileAnnotationSide(file),
+          lineNumber: visible ? comment.line : 0,
+          metadata: { kind: "comment", comment, detached: !visible && comment.line > 0 },
+        });
+      }
+      for (const target of fileComposers) {
+        annotations.push({
+          side: pierreSide(target.side),
+          lineNumber: target.line,
+          metadata: { kind: "composer", target },
+        });
+      }
+      const meta = metaAnnotation(entry);
+      if (meta) {
+        annotations.push({ side: fileAnnotationSide(file), lineNumber: 0, metadata: meta });
+      }
+
+      const signature = [
+        state?.status ?? "idle",
+        state?.revision ?? 0,
+        entry.expanded,
+        state?.diff?.hunks.length ?? -1,
+        fileComments.map(commentSignature).join("|"),
+        fileComposers.map((composer) => composer.key).join("|"),
+        entry.unavailable ?? "",
+      ].join(":");
+      result.push({
+        id: file.path,
+        type: "diff",
+        fileDiff: pierreFileDiff(
+          file,
+          state,
+          `${session?.session_id ?? "session"}:${viewingRevision ?? 0}:${file.path}`,
+        ),
+        annotations,
+        collapsed: !entry.expanded,
+        version: itemVersion(file.path, signature),
+      });
     }
-    topIndexRef.current = current.index;
-    const row = rowsRef.current[current.index];
-    if (!row) return;
-    const ctx = rowContext(row);
-    if (ctx.path === null) {
-      setActiveContext(null, null);
-      return;
-    }
-    let hunk: { idx: number; count: number } | null = null;
-    if (ctx.hunkIdx !== null) {
-      const count = store.getState().fileDiffs[ctx.path]?.diff?.hunks.length ?? 0;
-      if (count > 0) hunk = { idx: ctx.hunkIdx, count };
-    }
-    setActiveContext(ctx.path, hunk);
-  }, []);
+    return result;
+  }, [
+    comments,
+    composers,
+    files,
+    reviewComposerOpen,
+    session?.session_id,
+    viewingRevision,
+  ]);
+
+  const fileMap = useMemo(
+    () => new Map(files.map((entry) => [entry.file.path, entry])),
+    [files],
+  );
+
+  const options = useMemo<CodeViewOptions<Annotation>>(
+    () => ({
+      themeType: theme,
+      diffStyle: viewMode,
+      overflow: wrapLines ? "wrap" : "scroll",
+      diffIndicators: "classic",
+      lineDiffType: "word-alt",
+      hunkSeparators: "line-info-basic",
+      // Keep unchanged regions collapsed initially; Diffs' hunk controls can
+      // expand them incrementally without materializing an entire large file.
+      expandUnchanged: false,
+      expansionLineCount: 20,
+      stickyHeaders: true,
+      pointerEventsOnScroll: true,
+      // CodeView reuses the placeholder header while an item lazily loads.
+      // Prediff renders stable manifest counts in the metadata slot instead.
+      unsafeCSS: "[data-additions-count],[data-deletions-count]{display:none}",
+      enableLineSelection: interdiff === null,
+      lineHoverHighlight: "both",
+      onLineClick: (line: AnyLineClick, context: ItemContext) => {
+        if (context.item.type !== "diff" || !("annotationSide" in line)) return;
+        const location: DiffLocation = {
+          file: context.item.id,
+          side: prediffSide(line.annotationSide),
+          line: line.lineNumber,
+        };
+        noteActiveLine(location);
+        if (store.getState().reanchoring !== null) {
+          void reanchorTo(location.side, location.line);
+        }
+      },
+      onLineSelectionEnd: (range: SelectedLineRange | null, context: ItemContext) => {
+        if (!range || context.item.type !== "diff") return;
+        const side = prediffSide(range.endSide ?? range.side ?? "additions");
+        openComposer(
+          context.item.id,
+          side,
+          Math.min(range.start, range.end),
+          Math.max(range.start, range.end),
+        );
+        queueMicrotask(() => ref.current?.clearSelectedLines());
+      },
+    }),
+    [interdiff, theme, viewMode, wrapLines],
+  );
 
   useEffect(() => {
     registerDiffController({
-      scrollToIndex: (index, align = "start") => {
-        virtualizerRef.current.scrollToIndex(index, { align });
-        // With soft wrap on, row heights are estimates until rendered rows
-        // measure, so a deep jump can land short. Re-issue the scroll for a
-        // few frames until the target offset stabilizes (each extra pass is
-        // a no-op once measurements have settled — wrap off settles on the
-        // first frame).
-        let prevOffset: number | null = null;
-        let passes = 8;
-        const settle = (): void => {
-          const v = virtualizerRef.current;
-          const offset = v.getOffsetForIndex(index, align)?.[0];
-          if (offset === undefined) return;
-          if (prevOffset !== null && Math.abs(offset - prevOffset) < 1) return;
-          prevOffset = offset;
-          v.scrollToIndex(index, { align });
-          if (--passes > 0) requestAnimationFrame(settle);
-        };
-        requestAnimationFrame(settle);
-        // Scroll events / rAF can be throttled (background tabs); make sure
-        // the sticky header and top-index tracking still catch up.
-        setTimeout(updateContext, 50);
-      },
-      getTopIndex: computeTopIndex,
+      scrollToItem: (path, align = "start") =>
+        ref.current?.scrollTo({ type: "item", id: path, align }),
+      scrollToLine: (location, align = "center") =>
+        ref.current?.scrollTo({
+          type: "line",
+          id: location.file,
+          lineNumber: location.line,
+          side: pierreSide(location.side),
+          align,
+        }),
+      scrollToTop: () =>
+        ref.current?.scrollTo({ type: "position", position: 0 }),
+      clearSelection: () => ref.current?.clearSelectedLines(),
     });
     return () => registerDiffController(null);
-  }, [computeTopIndex, updateContext]);
-
-  // Toggling wrap changes every code row's height: drop cached measurements
-  // so stale wrapped heights never position unwrapped rows (and vice versa).
-  const wrapWasOn = useRef(wrapLines);
-  useEffect(() => {
-    if (wrapWasOn.current === wrapLines) return;
-    wrapWasOn.current = wrapLines;
-    virtualizerRef.current.measure();
-  }, [wrapLines]);
-
-  // With wrap on, wrapped heights depend on the pane width. Rendered rows
-  // re-measure themselves (measureElement observes them), but cached offscreen
-  // measurements would go stale — flush the cache when the width changes
-  // (window resize, tree-width drag).
-  useEffect(() => {
-    if (!wrapLines) return;
-    const el = parentRef.current;
-    if (!el) return;
-    let lastWidth = el.clientWidth;
-    const observer = new ResizeObserver(() => {
-      const width = el.clientWidth;
-      if (width !== lastWidth) {
-        lastWidth = width;
-        virtualizerRef.current.measure();
-      }
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [wrapLines]);
+  }, []);
 
   useEffect(() => {
-    const el = parentRef.current;
-    if (!el) return;
-    let raf = 0;
-    const onScroll = (): void => {
-      // User scrolls release the keyboard-focus anchor (programmatic scrolls
-      // are filtered out inside noteScroll) — nav follows the viewport again.
-      noteScroll();
-      if (raf === 0) {
-        raf = requestAnimationFrame(() => {
-          raf = 0;
-          updateContext();
-        });
-      }
-    };
-    // Any mouse interaction with a diff row or comment card re-syncs the
-    // keyboard-focus anchor to that row (QA F4): n/p/c act from where the
-    // user actually is, not from a stale viewport/nav position.
-    const onMouseDown = (e: MouseEvent): void => {
-      const target = e.target instanceof Element ? e.target : null;
-      const vrow = target?.closest<HTMLElement>(".vrow") ?? null;
-      const index = vrow ? Number(vrow.dataset["index"]) : NaN;
-      const row = Number.isInteger(index) ? rowsRef.current[index] : undefined;
-      if (row) noteRowInteraction(row.key);
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    el.addEventListener("mousedown", onMouseDown);
-    return () => {
-      el.removeEventListener("scroll", onScroll);
-      el.removeEventListener("mousedown", onMouseDown);
-      if (raf !== 0) cancelAnimationFrame(raf);
-    };
-  }, [updateContext]);
-
-  // Rows changed (loads, expands, revision switch): re-derive the context.
-  useEffect(() => {
-    updateContext();
-  }, [rows, updateContext]);
-
-  // Selection commit lives in beginSelection (store); Escape-cancel lives in
-  // the global keyboard model. Nothing to wire up here.
-
-  // With wrap off, the unified-mode canvas grows with the longest loaded line
-  // so long code is reachable by horizontal scroll (split mode ellipsizes
-  // within panes). With wrap on, code wraps to the pane width instead.
-  const canvasMinWidth =
-    viewMode === "unified" && !wrapLines
-      ? `calc(${canvasChars}ch + ${ROW_CHROME_PX}px)`
-      : "100%";
+    if (searchHighlight) {
+      ref.current?.setSelectedLines({
+        id: searchHighlight.file,
+        range: {
+          start: searchHighlight.line,
+          end: searchHighlight.line,
+          side: pierreSide(searchHighlight.side),
+        },
+      });
+    } else {
+      ref.current?.clearSelectedLines();
+    }
+  }, [searchHighlight]);
 
   return (
-    <div className="diff-wrap">
-      <div className="diff-scroll" ref={parentRef}>
-        <div
-          className={`diff-canvas${wrapLines ? " wrap" : ""}`}
-          style={{ height: virtualizer.getTotalSize(), minWidth: canvasMinWidth }}
-        >
-          {virtualizer.getVirtualItems().map((item) => {
-            const row = rows[item.index];
-            if (!row) return null;
-            const dynamic = isDynamicRow(row, wrapLines);
-            return (
-              <div
-                key={item.key}
-                className="vrow"
-                data-index={item.index}
-                // Only content-sized rows (threads, composers) are measured;
-                // line rows keep their fixed estimate to avoid layout reads.
-                ref={dynamic ? virtualizer.measureElement : undefined}
-                style={{
-                  transform: `translateY(${item.start}px)`,
-                  ...(dynamic ? {} : { height: item.size }),
-                }}
-              >
-                <RowView row={row} />
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      <Minimap scrollRef={parentRef} virtualizerRef={virtualizerRef} />
+    <div className="diff-wrap pierre-diff-wrap">
+      <CodeView<Annotation>
+        ref={ref}
+        items={items}
+        options={options}
+        className="pierre-code-view"
+        onScroll={(scrollTop, viewer) => {
+          const rendered = viewer.getRenderedItems().filter((item) => item.id !== REVIEW_ID);
+          let active = rendered[0]?.id ?? null;
+          for (const item of rendered) {
+            const top = viewer.getTopForItem(item.id);
+            if (top !== undefined && top <= scrollTop + 8) active = item.id;
+          }
+          setActiveContext(active);
+        }}
+        renderHeaderPrefix={(item) => {
+          if (item.id === REVIEW_ID) return null;
+          const entry = fileMap.get(item.id);
+          return entry ? <HeaderPrefix entry={entry} /> : null;
+        }}
+        renderHeaderMetadata={(item) => {
+          if (item.id === REVIEW_ID) return null;
+          const entry = fileMap.get(item.id);
+          return entry ? <HeaderMetadata entry={entry} /> : null;
+        }}
+        renderAnnotation={(annotation) =>
+          annotation.metadata ? <AnnotationView annotation={annotation.metadata} /> : null
+        }
+      />
     </div>
   );
 }
 
-const RowView = memo(function RowView({ row }: { row: Row }): ReactElement {
-  switch (row.kind) {
-    case "file":
-      return (
-        <FileHeaderRow
-          file={row.file}
-          expanded={row.expanded}
-          viewed={row.viewed}
-          commentCount={row.commentCount}
-          unresolvedCount={row.unresolvedCount}
+function HeaderPrefix({ entry }: { entry: ViewerFile }): ReactElement {
+  useEffect(() => {
+    if (
+      entry.expanded &&
+      entry.unavailable === undefined &&
+      !entry.file.binary &&
+      entry.state === undefined
+    ) {
+      void loadFileDiff(entry.file.path);
+    }
+  }, [entry]);
+  return (
+    <button
+      className="diffs-toggle"
+      title={entry.expanded ? "Collapse file" : "Expand file"}
+      onClick={(event) => {
+        event.stopPropagation();
+        toggleFile(entry.file.path);
+      }}
+    >
+      {entry.expanded ? "▾" : "▸"}
+    </button>
+  );
+}
+
+function HeaderMetadata({ entry }: { entry: ViewerFile }): ReactElement {
+  const commentCount = useStore(
+    (state) => state.comments.filter((comment) => comment.file === entry.file.path).length,
+  );
+  const unresolved = useStore(
+    (state) =>
+      state.comments.filter(
+        (comment) => comment.file === entry.file.path && comment.state !== "resolved",
+      ).length,
+  );
+  const viewed = useStore((state) => state.viewedFiles.has(entry.file.path));
+  const interdiff = useStore((state) => state.interdiff !== null);
+  return (
+    <span className="diffs-header-meta">
+      {entry.state?.status === "loading" && <span className="badge badge-muted">loading…</span>}
+      {entry.file.deletions > 0 && (
+        <span className="diffs-stat deletions">−{entry.file.deletions}</span>
+      )}
+      {entry.file.additions > 0 && (
+        <span className="diffs-stat additions">+{entry.file.additions}</span>
+      )}
+      {commentCount > 0 && (
+        <span className={unresolved ? "badge badge-primary" : "badge badge-muted"}>
+          {unresolved || commentCount} {unresolved ? "open" : "resolved"}
+        </span>
+      )}
+      {!interdiff && (
+        <ViewedCheckbox
+          viewed={viewed}
+          onClick={(event) => {
+            event.stopPropagation();
+            void toggleViewed(entry.file.path);
+          }}
         />
-      );
-    case "hunk":
-      return <HunkHeaderRow hunk={row.hunk} hunkIdx={row.hunkIdx} hunkCount={row.hunkCount} />;
-    case "line":
-      return (
-        <UnifiedLineRow
-          path={row.path}
-          line={row.line}
-          lang={languageForPath(row.path)}
-          counterpart={row.counterpart}
-        />
-      );
-    case "pair":
-      return <SplitLineRow path={row.path} pair={row.pair} lang={languageForPath(row.path)} />;
-    case "expand":
-      return <ExpandRow path={row.path} gap={row.gap} />;
-    case "meta":
-      return (
-        <MetaRow path={row.path} variant={row.variant} message={row.message} lines={row.lines} />
-      );
-    case "thread":
-      return <ThreadRow comment={row.comment} detached={row.detached} />;
+      )}
+    </span>
+  );
+}
+
+function AnnotationView({ annotation }: { annotation: Annotation }): ReactElement {
+  switch (annotation.kind) {
+    case "comment":
+      return <ThreadRow comment={annotation.comment} detached={annotation.detached} />;
     case "composer":
-      return <ComposerRow target={row.target} />;
-    case "review-label":
-      return (
-        <div className="review-label">
-          Review comments
-          <span className="review-label-sub">— about the change as a whole</span>
-        </div>
-      );
+      return <ComposerRow target={annotation.target} />;
     case "review-composer":
       return <ReviewComposerRow />;
+    case "meta":
+      return (
+        <MetaRow
+          path={annotation.path}
+          variant={annotation.variant}
+          message={annotation.message}
+          lines={annotation.lines}
+        />
+      );
   }
-});
+}
+
+function metaAnnotation(
+  entry: ViewerFile,
+): Extract<Annotation, { kind: "meta" }> | null {
+  const { file, state, unavailable } = entry;
+  if (unavailable !== undefined) {
+    return { kind: "meta", path: file.path, variant: "unavailable", message: unavailable };
+  }
+  if (file.binary) return { kind: "meta", path: file.path, variant: "binary" };
+  if (state?.status === "error") {
+    return { kind: "meta", path: file.path, variant: "error", message: state.error };
+  }
+  if (state?.diff?.large && state.diff.hunks.length === 0) {
+    return {
+      kind: "meta",
+      path: file.path,
+      variant: "large",
+      lines: file.additions + file.deletions,
+    };
+  }
+  if (state?.status === "ready" && state.diff?.hunks.length === 0) {
+    return { kind: "meta", path: file.path, variant: "empty" };
+  }
+  return null;
+}
+
+function commentSignature(comment: ReviewComment): string {
+  return [
+    comment.id,
+    comment.state,
+    comment.revision,
+    comment.line,
+    comment.end_line,
+    comment.text,
+    comment.tag ?? "",
+    comment.suggestion ?? "",
+    comment.replies.length,
+  ].join(":");
+}
+
+function pierreSide(side: Side): "deletions" | "additions" {
+  return side === "old" ? "deletions" : "additions";
+}
+
+function prediffSide(side: "deletions" | "additions"): Side {
+  return side === "deletions" ? "old" : "new";
+}
+
+function fileAnnotationSide(file: ManifestFile): "deletions" | "additions" {
+  return file.status === "deleted" ? "deletions" : "additions";
+}

@@ -23,10 +23,12 @@ its two failure modes for the agent-review loop:
 - **Feedback is never lost.** Comments persist to disk server-side the moment
   they exist; the daemon outlives the agent; `wait` timeouts are safe and
   ordinary. No localStorage, no "submit or lose it".
-- **Flat performance on huge diffs.** Manifest-first loading + virtualized
-  rendering + worker-based highlighting: first diff line in ~160 ms whether
-  the diff is 1k or 50k lines (difit: ~10× slower and >10× the memory at 50k
-  — see [bench/RESULTS.md](./bench/RESULTS.md)).
+- **Fast on huge diffs.** Manifest-first loading plus
+  [`@pierre/diffs`](https://diffs.com/docs) `CodeView` virtualization and
+  worker-based highlighting keep rendering proportional to the viewport,
+  rather than the full patch. A 10,000-line one-file acceptance fixture
+  reaches rendered code in under 0.5 s while keeping about 160 line nodes in
+  the DOM.
 
 ## Install
 
@@ -153,9 +155,9 @@ Notes for the loop:
   `--no-browser` or set `PREDIFF_NO_BROWSER=1` to skip that and just print
   the URL. (`--json` mode never opens a browser.)
 - **Large files are handled on purpose:** files with more than 800 changed
-  lines start auto-collapsed, and above 5000 changed lines the diff content
-  is withheld until you click "Load anyway" in the UI. That's a speed
-  guard, not a failure.
+  lines start auto-collapsed. The virtualized renderer keeps 10,000-line
+  diffs responsive; only individual files above 20,000 changed lines withhold
+  content until you click "Load anyway". That's a memory guard, not a failure.
 
 ## Features
 

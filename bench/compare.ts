@@ -379,21 +379,22 @@ async function browserRun(
     await page.goto(tool.url, { waitUntil: "commit", timeout: NAV_TIMEOUT });
 
     // shell / file list visible
-    // prediff selectors cover both the React UI (.row-file) and the older
-    // placeholder UI (.file .head) so the harness survives frontend evolution.
-    const fileHeadSel = ".row-file, .file .head";
-    const firstRenderSel = tool.name === "prediff" ? fileHeadSel : 'h3:has-text("Files changed")';
+    const fileHeadSel = '[data-diffs-header="default"]';
+    const diffLineSel =
+      '[data-line-type="change-addition"], [data-line-type="change-deletion"]';
+    const firstRenderSel =
+      tool.name === "prediff" ? fileHeadSel : 'h3:has-text("Files changed")';
     await page.waitForSelector(firstRenderSel, { timeout: NAV_TIMEOUT });
     m.firstRenderMs = performance.now() - t0;
 
-    // first diff line text visible (prediff collapses files by default, so
-    // this includes clicking the first file open — the real user path)
+    // First actual diff line. Open the first collapsed file if no expanded
+    // file has produced a line yet.
     if (tool.name === "prediff") {
-      await page.locator(fileHeadSel).first().click();
-      await page.waitForSelector(
-        ".row-line, .row-split, table.hunks tr.add, table.hunks tr.del",
-        { timeout: NAV_TIMEOUT },
-      );
+      const existing = await page.locator(diffLineSel).count();
+      if (existing === 0) {
+        await page.locator('button[title="Expand file"]').first().click();
+      }
+      await page.waitForSelector(diffLineSel, { timeout: NAV_TIMEOUT });
     } else {
       await page.waitForSelector("span.token-line", { timeout: NAV_TIMEOUT });
     }
@@ -425,7 +426,7 @@ async function browserRun(
       await page.evaluate(() => (window as unknown as { __startFps: () => void }).__startFps());
       for (let i = 0; i < 40; i++) {
         if (tool.name === "prediff") {
-          const collapsed = page.locator(".twisty", { hasText: "▸" });
+          const collapsed = page.locator('button[title="Expand file"]');
           const n = Math.min(await collapsed.count(), 3);
           for (let k = 0; k < n; k++) {
             await collapsed.first().click({ timeout: 1000 }).catch(() => {});
@@ -742,9 +743,9 @@ ${errors.length ? `### Errors / timeouts observed\n\n${errors.join("\n")}` : ""}
 - prediff runs from TypeScript source under bun; difit runs its published,
   pre-built npm dist under node. That is how each ships today, but it is not
   an engine-identical comparison.
-- prediff's frontend (React + @tanstack/react-virtual, Shiki highlighting in a
-  worker, files collapsed by default, hunks fetched on expand) is under active
-  development and was measured as of this working tree; difit ships its
+- prediff's frontend (React + @pierre/diffs CodeView virtualization and worker
+  highlighting, files collapsed by default, hunks fetched on expand) is under
+  active development and was measured as of this working tree; difit ships its
   released React UI (Prism highlighting, whole diff rendered up front). The
   browser rows compare the two architectures — lazy two-phase + virtualization
   vs render-everything. "First diff line" for prediff includes a scripted

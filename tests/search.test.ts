@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { SearchResult } from "../src/types";
 import { Daemon } from "../src/server/server";
 import { matchPreview, searchRawDiff } from "../src/server/search";
+import { LARGE_FILE_LINES } from "../src/git/diff";
 import { cleanup, commitAll, initRepo, tempDir, write } from "./helpers";
 
 // ---------------------------------------------------------------------------
@@ -100,8 +101,11 @@ beforeAll(async () => {
 
   // Revision 1: an edit plus a big untracked file (large-file territory).
   await write(repo, "src/util.ts", "export const alpha = 1;\nexport const uniqueNeedle = 2;\n");
-  const bigLines = Array.from({ length: 6000 }, (_, i) => `filler line ${i}`);
-  bigLines[5432] = "buried TREASURE token";
+  const bigLines = Array.from(
+    { length: LARGE_FILE_LINES + 1_000 },
+    (_, i) => `filler line ${i}`,
+  );
+  bigLines[LARGE_FILE_LINES + 432] = "buried TREASURE token";
   await write(repo, "src/big.txt", bigLines.join("\n") + "\n");
 
   daemon = new Daemon({ repoRoot: repo, stateDir, range: "working", ttlMs: 0 });
@@ -135,7 +139,11 @@ describe("GET /api/search", () => {
     expect(manifest.files.find((f) => f.path === "src/big.txt")?.large).toBe(true);
     const r = await http<SearchResult>("/api/search?q=treasure");
     expect(r.matches).toHaveLength(1);
-    expect(r.matches[0]).toMatchObject({ file: "src/big.txt", side: "new", line: 5433 });
+    expect(r.matches[0]).toMatchObject({
+      file: "src/big.txt",
+      side: "new",
+      line: LARGE_FILE_LINES + 433,
+    });
   });
 
   test("caps results and sets truncated", async () => {

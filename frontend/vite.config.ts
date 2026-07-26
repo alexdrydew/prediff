@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { fileURLToPath } from "node:url";
 
 /**
  * Dev mode proxies /api and /events to a running prediff daemon.
@@ -10,6 +11,23 @@ const daemon = process.env["PREDIFF_URL"] ?? "http://127.0.0.1:4870";
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // @pierre/diffs imports the full Shiki registry by default. Prediff's
+    // fine-grained facade keeps syntax grammars lazy and avoids shipping every
+    // language and theme in the production asset manifest.
+    alias: [
+      {
+        find: /^shiki$/,
+        replacement: fileURLToPath(new URL("./src/lib/shiki.ts", import.meta.url)),
+      },
+      {
+        find: /^@pierre\/theming\/themes$/,
+        replacement: fileURLToPath(
+          new URL("./src/lib/pierreThemes.ts", import.meta.url),
+        ),
+      },
+    ],
+  },
   // Built assets are served by the daemon from public/ (see src/server/server.ts).
   build: {
     outDir: "../public",

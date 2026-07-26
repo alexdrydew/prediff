@@ -17,7 +17,7 @@ import {
   toggleWrapLines,
   useStore,
 } from "../state/store";
-import { scrollToRow } from "../state/controller";
+import { scrollToTop } from "../state/controller";
 import { toggleTheme } from "../lib/theme";
 
 const SYNC_LABEL: Record<string, string> = {
@@ -209,7 +209,7 @@ export function TopBar(): ReactElement {
         title="Comment on the change as a whole — no line anchor (like a GitHub review summary)"
         onClick={() => {
           openReviewComposer();
-          scrollToRow(0);
+          scrollToTop();
         }}
       >
         Review comment
