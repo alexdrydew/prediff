@@ -1,11 +1,12 @@
 ---
 name: prediff-review
 description: >
-  Present your local code changes to the developer for review in a browser
-  diff UI, then act on their comments (line-level, file-level, and
-  review-level) — all before anything is pushed.
+  Present Git changes, plain-file comparisons, or unified patch output to the
+  developer for review in a browser diff UI, then act on their comments
+  (line-level, file-level, and review-level) — all before anything is pushed.
   Use after completing a nontrivial code change when the developer should
-  review it, or when they ask to "review the diff" / "show me the changes".
+  review it, when they ask to "review the diff" / "show me the changes", or
+  when changes come from diff -u, hg diff, or another unified-diff producer.
   Never lose feedback: all comments are persisted server-side; timeouts are
   normal and safe.
 ---
@@ -30,12 +31,38 @@ retrying the commands verbatim.
 
 ### 1. Open a review session
 
+Choose the source that represents the work.
+
+**Git-backed review** — use this inside a Git worktree:
+
 ```bash
 prediff open working --scope "<the task you were asked to do>" --json
 ```
 
 Ranges: `working` (everything vs HEAD — the usual choice), `staged`, `HEAD`
-(last commit), or any `A..B`. `--scope` is a one-line statement of your task
+(last commit), a commit-ish, or `A..B` / `A...B`.
+
+**Unified-patch review** — use this for plain files, non-Git VCSes, generated
+patches, or any command that emits unified diff:
+
+```bash
+diff -ruN before/ after/ | prediff open - --scope "<the task>" --json
+hg diff | prediff open - --scope "<the task>" --json
+prediff open --patch changes.diff --scope "<the task>" --json
+```
+
+`open -` reads stdin; `--patch <file>` reads a saved patch. Portable
+`diff -u`/`diff -ruN` and Git extended unified format are supported. Prediff
+automatically creates and activates a durable session associated with the
+directory where `open` ran, even outside a Git repository. Keep the patch
+producer command: it is how you submit later revisions.
+
+Patch input is a snapshot of changed hunks, not complete old/new files.
+Comments, suggestions, search, viewed state, and revisions work normally on
+supplied lines; expanding beyond the patch's context is unavailable. Prefer
+`diff -ruN` for directory trees so additions and deletions are represented.
+
+For either source, `--scope` is a one-line statement of your task
 ("fix the login redirect bug") — the UI uses it to flag files you touched
 outside the stated scope, so always pass it. If you know exactly which files
 your task covers, pass `--scope-files "src/lib/**,src/routes/users.ts"`
@@ -49,8 +76,9 @@ Output:
 
 The port is chosen per repo (and stays stable across daemon restarts) —
 never assume a port; always read the `url` field. Tell the developer the URL
-and what you'd like them to look at. `open` is idempotent — re-running
-refreshes the diff in place.
+and what you'd like them to look at. Re-running `open` refreshes a Git-backed
+review; for patch-backed reviews, use `refresh --patch` so the new snapshot
+becomes the next revision of the same session.
 
 ### 2. Wait for feedback — timeouts are normal
 
@@ -123,12 +151,24 @@ States you will see (drafts are always excluded):
   reply explaining either way.
 - `resolved` — done.
 
-For each comment you act on: make the fix, then
+For each comment you act on, make the fix and submit the next revision using
+the same source type:
 
 ```bash
-prediff refresh --json                 # recompute the diff → new revision, UI updates live
+# Git-backed session
+prediff refresh --json
+
+# Patch-backed session: rerun the original producer
+diff -ruN before/ after/ | prediff refresh --patch - --json
+# or replace/read a saved snapshot
+prediff refresh --patch changes.diff --json
+
 prediff resolve <comment-id> --reply "Fixed: <what you did>" --json
 ```
+
+Do not use plain `refresh` for a patch session: there is no Git range to
+recompute. `refresh --patch` records the supplied snapshot as the next
+revision and updates the UI live.
 
 Resolve with a reply every time — the developer sees your reply threaded
 under their comment in the UI. If you *disagree* with a comment, reply via
@@ -148,6 +188,16 @@ prediff status --json     # session snapshot: session_state, revision, counts by
 prediff comments --json   # everything you're allowed to see, including resolved
 ```
 
+Follow-up commands use the active session for the directory where `open` ran.
+If you are now in another directory, use the `session_id` returned by `open`:
+
+```bash
+prediff status --session <session-id> --json
+prediff comments --session <session-id> --json --unresolved
+prediff wait --session <session-id> --timeout 240 --json
+prediff refresh --session <session-id> --patch changes.diff --json
+```
+
 The daemon outlives your process (idle TTL ~4h). If your session/context was
 interrupted mid-review, just run `prediff status --json` — nothing was lost.
 Every diff recompute is a numbered **revision**; old revisions stay viewable
@@ -158,6 +208,8 @@ under the developer.
 
 - Surface the review URL to the developer immediately after `open`.
 - Always pass `--scope` on `open` so out-of-scope files are flagged honestly.
+- Preserve the patch producer command for patch-backed sessions and use it
+  with `refresh --patch -` after every change.
 - Prefer several short `wait` calls over one long one; between them you can
   do other work the developer asked for.
 - Address every `submitted` and `addressed` comment in a batch before going
