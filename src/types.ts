@@ -15,6 +15,7 @@ export const SCHEMA_VERSION = 2;
 /** Normalized diff range spec as given by the user, e.g. "working", "staged",
  * "HEAD", "v1..v2", or any commit-ish. */
 export type RangeSpec = string;
+export type DiffSourceKind = "git" | "patch";
 
 // ---------------------------------------------------------------------------
 // Diff manifest & hunks
@@ -185,6 +186,8 @@ export interface FeedbackBatch {
 export interface Session {
   schema_version: number;
   session_id: string;
+  /** Additive source discriminator; absent sessions migrate to `git`. */
+  source_kind?: DiffSourceKind;
   repo_root: string;
   range: RangeSpec;
   /** Current revision number; history retained on disk (spec §0.1). */

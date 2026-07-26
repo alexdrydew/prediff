@@ -134,6 +134,7 @@ export interface SearchHighlight {
 
 export interface SessionMeta {
   session_id: string;
+  source_kind: "git" | "patch";
   range: string;
   /** The server's current (latest) revision. */
   revision: number;
@@ -367,6 +368,7 @@ export async function loadServerState(): Promise<void> {
       viewedFiles: new Set(session.viewed_files),
       session: {
         session_id: session.session_id,
+        source_kind: session.source_kind ?? "git",
         range: session.range,
         revision: session.revision,
         session_state: session.session_state,
@@ -482,6 +484,7 @@ export async function applyRevision(revision: number | null): Promise<void> {
       viewedFiles: new Set(session.viewed_files),
       session: {
         session_id: session.session_id,
+        source_kind: session.source_kind ?? "git",
         range: session.range,
         revision: session.revision,
         session_state: session.session_state,

@@ -2,9 +2,9 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Lockfile } from "../types";
+import type { Lockfile, Session } from "../types";
 import { repoRoot as gitRepoRoot } from "../git/exec";
-import { daemonLogPath, stateDir } from "../store/paths";
+import { daemonLogPath, dataHome, sessionPath, stateDir } from "../store/paths";
 import { liveLockfile } from "../server/lockfile";
 import { DEFAULT_TTL_S } from "../server/daemon";
 
@@ -27,7 +27,12 @@ export async function requireRepoRoot(cwd = process.cwd()): Promise<string> {
   return root;
 }
 
-/** Lockfile of a live daemon for this repo, or null. */
+/** Git root when available; otherwise the real current directory. */
+export async function workspaceRoot(cwd = process.cwd()): Promise<string> {
+  return (await gitRepoRoot(cwd)) ?? fs.realpath(cwd);
+}
+
+/** Lockfile of a live daemon for this workspace, or null. */
 export async function findDaemon(repoRoot: string): Promise<Lockfile | null> {
   return liveLockfile(await stateDir(repoRoot));
 }
@@ -35,6 +40,7 @@ export async function findDaemon(repoRoot: string): Promise<Lockfile | null> {
 export interface EnsureOptions {
   range: string;
   ttlS?: number;
+  initialPatch?: string;
 }
 
 /**
@@ -47,6 +53,11 @@ export async function ensureDaemon(repoRoot: string, opts: EnsureOptions): Promi
 
   const dir = await stateDir(repoRoot);
   const logFile = Bun.file(daemonLogPath(dir));
+  let bootstrapPatch: string | null = null;
+  if (opts.initialPatch !== undefined) {
+    bootstrapPatch = path.join(dir, "bootstrap.patch");
+    await Bun.write(bootstrapPatch, opts.initialPatch);
+  }
   const args = [
     process.execPath, // the bun binary running this CLI
     DAEMON_ENTRY,
@@ -56,6 +67,7 @@ export async function ensureDaemon(repoRoot: string, opts: EnsureOptions): Promi
     opts.range,
     "--ttl",
     String(opts.ttlS ?? DEFAULT_TTL_S),
+    ...(bootstrapPatch !== null ? ["--patch-file", bootstrapPatch] : []),
   ];
   const child = Bun.spawn(args, {
     cwd: repoRoot,
@@ -78,6 +90,32 @@ export async function ensureDaemon(repoRoot: string, opts: EnsureOptions): Promi
     await Bun.sleep(50);
   }
   throw new CliError(`daemon did not become ready; see ${daemonLogPath(dir)}`);
+}
+
+/** Find the state directory and live daemon that own an explicit session. */
+export async function findDaemonForSession(
+  sessionId: string,
+): Promise<{ lock: Lockfile; session: Session } | null> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dataHome());
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    const dir = path.join(dataHome(), entry);
+    const file = Bun.file(sessionPath(dir, sessionId));
+    if (!(await file.exists())) continue;
+    let session: Session;
+    try {
+      session = (await file.json()) as Session;
+    } catch {
+      continue;
+    }
+    const lock = await liveLockfile(dir);
+    if (lock) return { lock, session };
+  }
+  return null;
 }
 
 export async function api<T>(

@@ -9,8 +9,17 @@
  */
 
 import type { OpenResult, ReviewComment, StatusResult, SuggestionResult, WaitResult } from "../types";
-import { CliError, api, ensureDaemon, findDaemon, requireRepoRoot } from "./client";
+import {
+  CliError,
+  api,
+  ensureDaemon,
+  findDaemon,
+  findDaemonForSession,
+  requireRepoRoot,
+  workspaceRoot,
+} from "./client";
 import { pidAlive } from "../server/lockfile";
+import { parsePatch } from "../diff/patch";
 
 const COMMANDS = new Set([
   "open",
@@ -67,7 +76,16 @@ function parseArgs(argv: string[]): ParsedArgs {
   return { command, positional, flags };
 }
 
-const FLAGS_WITH_VALUE = new Set(["timeout", "reply", "ttl", "scope", "scope-files", "state"]);
+const FLAGS_WITH_VALUE = new Set([
+  "timeout",
+  "reply",
+  "ttl",
+  "scope",
+  "scope-files",
+  "state",
+  "patch",
+  "session",
+]);
 
 function out(json: boolean, value: unknown, human: (v: never) => string): void {
   if (json) {
@@ -77,12 +95,44 @@ function out(json: boolean, value: unknown, human: (v: never) => string): void {
   }
 }
 
-async function requireDaemon(repoRoot: string) {
-  const lock = await findDaemon(repoRoot);
+async function requireDaemon(args: ParsedArgs) {
+  const sessionFlag = args.flags.get("session");
+  if (sessionFlag === true) throw new CliError("--session requires an id");
+  if (typeof sessionFlag === "string") {
+    const found = await findDaemonForSession(sessionFlag);
+    if (!found) {
+      throw new CliError(`no running prediff daemon for session ${sessionFlag}`);
+    }
+    await api(found.lock, "/api/session/select", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionFlag }),
+    });
+    return found.lock;
+  }
+  const root = await workspaceRoot();
+  const lock = await findDaemon(root);
   if (!lock) {
-    throw new CliError("no prediff daemon running for this repo (run `prediff open` first)");
+    throw new CliError(
+      "no active prediff review in this directory (run `prediff open` first)",
+    );
   }
   return lock;
+}
+
+async function readPatchInput(value: string): Promise<string> {
+  let raw: string;
+  if (value === "-") {
+    raw = await Bun.stdin.text();
+  } else {
+    const file = Bun.file(value);
+    if (!(await file.exists())) throw new CliError(`patch file not found: ${value}`);
+    raw = await file.text();
+  }
+  try {
+    return parsePatch(raw, 1).raw;
+  } catch (error) {
+    throw new CliError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +140,11 @@ async function requireDaemon(repoRoot: string) {
 
 async function cmdOpen(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
-  const range = args.positional[0] ?? "working";
+  const patchFlag = args.flags.get("patch");
+  if (patchFlag === true) throw new CliError("--patch requires a file path or - for stdin");
+  const positionalPatch = args.positional[0] === "-" ? "-" : null;
+  const patchInput = typeof patchFlag === "string" ? patchFlag : positionalPatch;
+  const range = patchInput === null ? (args.positional[0] ?? "working") : "patch";
   const scopeFlag = args.flags.get("scope");
   const scopeFilesFlag = args.flags.get("scope-files");
   if (scopeFilesFlag === true) {
@@ -105,16 +159,18 @@ async function cmdOpen(args: ParsedArgs): Promise<number> {
           .map((p) => p.trim())
           .filter((p) => p !== "")
       : null;
-  const root = await requireRepoRoot();
+  const root = patchInput === null ? await requireRepoRoot() : await workspaceRoot();
+  const patch = patchInput === null ? null : await readPatchInput(patchInput);
   const ttlFlag = args.flags.get("ttl");
   const lock = await ensureDaemon(root, {
     range,
     ...(typeof ttlFlag === "string" ? { ttlS: Number(ttlFlag) } : {}),
+    ...(patch !== null ? { initialPatch: patch } : {}),
   });
   const result = await api<OpenResult>(lock, "/api/open", {
     method: "POST",
     body: JSON.stringify({
-      range,
+      ...(patch === null ? { range } : { patch }),
       ...(typeof scopeFlag === "string" ? { scope: scopeFlag } : {}),
       ...(scopeFiles !== null ? { scope_files: scopeFiles } : {}),
     }),
@@ -134,7 +190,7 @@ async function cmdOpen(args: ParsedArgs): Promise<number> {
 
 async function cmdStatus(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
-  const lock = await requireDaemon(await requireRepoRoot());
+  const lock = await requireDaemon(args);
   const status = await api<StatusResult>(lock, "/api/status");
   out(json, status, (s: StatusResult) =>
     [
@@ -174,7 +230,7 @@ async function cmdSuggestion(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
   const id = args.positional[0];
   if (!id) throw new CliError("usage: prediff suggestion <comment-id> [--json]");
-  const lock = await requireDaemon(await requireRepoRoot());
+  const lock = await requireDaemon(args);
   const result = await api<SuggestionResult>(
     lock,
     `/api/comments/${encodeURIComponent(id)}/suggestion`,
@@ -193,7 +249,7 @@ async function cmdSuggestion(args: ParsedArgs): Promise<number> {
 
 async function cmdComments(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
-  const lock = await requireDaemon(await requireRepoRoot());
+  const lock = await requireDaemon(args);
   // Drafts are the reviewer's private workspace — always excluded here.
   const params = new URLSearchParams({ exclude_drafts: "1" });
   if (args.flags.has("unresolved")) params.set("unresolved", "1");
@@ -223,7 +279,7 @@ async function cmdWait(args: ParsedArgs): Promise<number> {
   const timeoutFlag = args.flags.get("timeout");
   const timeoutS = typeof timeoutFlag === "string" ? Number(timeoutFlag) : 60;
   if (!Number.isFinite(timeoutS) || timeoutS < 0) throw new CliError("invalid --timeout");
-  const lock = await requireDaemon(await requireRepoRoot());
+  const lock = await requireDaemon(args);
   const result = await api<WaitResult>(lock, `/api/wait?timeout=${timeoutS}`, {
     timeoutMs: (timeoutS + 30) * 1_000,
   });
@@ -245,7 +301,7 @@ async function cmdResolve(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
   const id = args.positional[0];
   if (!id) throw new CliError("usage: prediff resolve <comment-id> [--reply <text>]");
-  const lock = await requireDaemon(await requireRepoRoot());
+  const lock = await requireDaemon(args);
   const reply = args.flags.get("reply");
   const comment = await api<ReviewComment>(lock, `/api/comments/${encodeURIComponent(id)}/resolve`, {
     method: "POST",
@@ -257,14 +313,21 @@ async function cmdResolve(args: ParsedArgs): Promise<number> {
 
 async function cmdRefresh(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
-  const lock = await requireDaemon(await requireRepoRoot());
+  const patchFlag = args.flags.get("patch");
+  if (patchFlag === true) throw new CliError("--patch requires a file path or - for stdin");
+  const patch = typeof patchFlag === "string" ? await readPatchInput(patchFlag) : null;
+  const lock = await requireDaemon(args);
   const result = await api<{
     changed: boolean;
     revision: number;
     files: number;
     additions: number;
     deletions: number;
-  }>(lock, "/api/refresh", { method: "POST", timeoutMs: 60_000 });
+  }>(lock, "/api/refresh", {
+    method: "POST",
+    body: JSON.stringify(patch === null ? {} : { patch }),
+    timeoutMs: 60_000,
+  });
   out(json, result, (r: typeof result) =>
     `revision ${r.revision}${r.changed ? " (diff changed)" : " (no change)"}: ` +
     `${r.files} file(s), +${r.additions} -${r.deletions}`,
@@ -274,8 +337,12 @@ async function cmdRefresh(args: ParsedArgs): Promise<number> {
 
 async function cmdStop(args: ParsedArgs): Promise<number> {
   const json = args.flags.has("json");
-  const root = await requireRepoRoot();
-  const lock = await findDaemon(root);
+  const sessionFlag = args.flags.get("session");
+  if (sessionFlag === true) throw new CliError("--session requires an id");
+  const lock =
+    typeof sessionFlag === "string"
+      ? (await findDaemonForSession(sessionFlag))?.lock ?? null
+      : await findDaemon(await workspaceRoot());
   if (!lock) {
     out(json, { stopped: false, reason: "not running" }, () => "no daemon running");
     return 0;
@@ -300,6 +367,8 @@ function cmdHelp(): number {
       "commands:",
       "  open [range]              start/reuse daemon, open a review session",
       "                            range: working (default) | staged | HEAD | A..B | <commit-ish>",
+      "  open -                    read a unified diff from stdin",
+      "  open --patch <file>       review a unified-diff file (use - for stdin)",
       "                            flags: --json --ttl <s> --scope <task> --no-browser",
       "                                   --scope-files <globs>  (comma-separated, e.g.",
       "                                   \"src/lib/**,src/routes/users.ts\" — files matching",
@@ -311,8 +380,13 @@ function cmdHelp(): number {
       "                            {file, line, end_line, current_lines, suggestion}",
       "  wait --timeout <s>        long-poll; exits 0=ready 2=feedback 3=timeout",
       "  resolve <id> [--reply t]  mark a comment resolved (with an optional reply)",
-      "  refresh                   recompute the diff (bumps the revision)",
-      "  stop                      stop the daemon for this repo",
+      "  refresh                   recompute a Git diff",
+      "  refresh --patch <file>    submit a new patch snapshot as a revision",
+      "  stop                      stop the daemon for this workspace",
+      "",
+      "session selection:",
+      "  Commands use the active session for the current directory.",
+      "  Pass --session <id> to address a running review from elsewhere.",
     ].join("\n"),
   );
   return 0;

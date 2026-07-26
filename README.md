@@ -102,9 +102,52 @@ prediff stop
 Ranges: `working` (default; staged+unstaged vs HEAD), `staged`, `HEAD`
 (last commit), any commit-ish, or `A..B` / `A...B`.
 
+### Review any unified diff
+
+Prediff can also consume portable `diff -u` output or Git's extended unified
+format. The review session is created automatically and associated with the
+directory where it was opened, even when that directory is not a Git
+repository:
+
+```sh
+git diff | prediff open -
+diff -ruN before/ after/ | prediff open -
+hg diff | prediff open -
+prediff open --patch changes.diff
+```
+
+Follow-up commands discover that active session from the same directory:
+
+```sh
+prediff status
+prediff comments --unresolved
+prediff wait --timeout 240
+prediff stop
+```
+
+A later patch snapshot becomes the next revision of the same review, retaining
+comments and viewed state:
+
+```sh
+git diff | prediff refresh --patch -
+```
+
+Use `--session <id>` to address a running review from another directory:
+
+```sh
+prediff status --session sess_abc123
+prediff comments --session sess_abc123
+```
+
+Patch input is snapshot-only: it contains changed hunks but usually not full
+old/new files. Diff rendering, search, comments, suggestions on supplied
+lines, revisions, and the feedback loop work normally; expanding beyond the
+included context is unavailable. Generate unified input with `diff -u` (and
+`-r` for directory trees).
+
 Notes for the loop:
 
-- **The port is per-repo** (and stable across daemon restarts). Never assume
+- **The port is per-workspace** (and stable across daemon restarts). Never assume
   a port number — always read the `url` field from the `--json` output.
 - **Headless / SSH boxes:** in human mode `open` launches a browser; pass
   `--no-browser` or set `PREDIFF_NO_BROWSER=1` to skip that and just print

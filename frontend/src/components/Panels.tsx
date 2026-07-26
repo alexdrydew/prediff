@@ -97,6 +97,7 @@ function SendFeedbackPanel(): ReactElement {
 function MarkReadyPanel(): ReactElement {
   const unresolved = useStore(selectUnresolvedCount);
   const drafts = useStore(selectDraftCount);
+  const patchSource = useStore((s) => s.session?.source_kind === "patch");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,8 +118,9 @@ function MarkReadyPanel(): ReactElement {
     <div className="panel" role="dialog" aria-label="Mark ready">
       <h2>Mark this review as ready?</h2>
       <div className="sub">
-        You're signaling that you're satisfied. The next step (pushing to GitHub) happens outside
-        prediff.
+        {patchSource
+          ? "You're signaling that you're satisfied with this patch snapshot."
+          : "You're signaling that you're satisfied. The next step (pushing to GitHub) happens outside prediff."}
       </div>
       {unresolved > 0 && (
         <div className="panel-warning">
