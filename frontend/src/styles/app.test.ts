@@ -11,6 +11,12 @@ function declarations(selector: string): string {
 }
 
 describe("Diffs annotation layout contract", () => {
+  test("CodeView owns the scroll area used by sticky headers and context expansion", () => {
+    const rule = declarations(".pierre-code-view");
+
+    expect(rule).toContain("overflow: auto");
+  });
+
   test("comment annotations remain measurable normal-flow boxes", () => {
     const rule = declarations(".row-thread,\n.row-composer");
 

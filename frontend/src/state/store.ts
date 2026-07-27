@@ -586,13 +586,20 @@ export async function reopenSession(): Promise<void> {
 export async function toggleViewed(path: string, viewed?: boolean): Promise<void> {
   const s = getState();
   const next = viewed ?? !s.viewedFiles.has(path);
+  const previousCollapseOverride = s.collapsedOverride[path];
   // Optimistic; SSE viewed.changed reconciles.
   const set = new Set(s.viewedFiles);
   if (next) set.add(path);
   else set.delete(path);
   const touched = new Set(s.agentTouched);
   touched.delete(path);
-  setState({ viewedFiles: set, agentTouched: touched });
+  setState({
+    viewedFiles: set,
+    agentTouched: touched,
+    ...(next
+      ? { collapsedOverride: { ...s.collapsedOverride, [path]: true } }
+      : {}),
+  });
   try {
     await api.setViewed([path], next);
   } catch {
@@ -600,7 +607,11 @@ export async function toggleViewed(path: string, viewed?: boolean): Promise<void
       const revert = new Set(st.viewedFiles);
       if (next) revert.delete(path);
       else revert.add(path);
-      return { viewedFiles: revert };
+      if (!next || st.collapsedOverride[path] !== true) return { viewedFiles: revert };
+      const collapsedOverride = { ...st.collapsedOverride };
+      if (previousCollapseOverride === undefined) delete collapsedOverride[path];
+      else collapsedOverride[path] = previousCollapseOverride;
+      return { viewedFiles: revert, collapsedOverride };
     });
   }
 }
