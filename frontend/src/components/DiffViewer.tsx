@@ -227,7 +227,10 @@ export function DiffViewer(): ReactElement {
       // CodeView reuses the placeholder header while an item lazily loads.
       // Prediff renders stable manifest counts in the metadata slot instead.
       unsafeCSS: "[data-additions-count],[data-deletions-count]{display:none}",
-      enableLineSelection: interdiff === null,
+      // Keep native browser text selection independent from review gestures.
+      // Diffs' gutter utility owns line/range comments, while dragging over
+      // code remains a normal text selection.
+      enableGutterUtility: interdiff === null,
       lineHoverHighlight: "both",
       onLineClick: (line: AnyLineClick, context: ItemContext) => {
         if (context.item.type !== "diff" || !("annotationSide" in line)) return;
@@ -241,8 +244,8 @@ export function DiffViewer(): ReactElement {
           void reanchorTo(location.side, location.line);
         }
       },
-      onLineSelectionEnd: (range: SelectedLineRange | null, context: ItemContext) => {
-        if (!range || context.item.type !== "diff") return;
+      onGutterUtilityClick: (range: SelectedLineRange, context: ItemContext) => {
+        if (context.item.type !== "diff") return;
         const side = prediffSide(range.endSide ?? range.side ?? "additions");
         openComposer(
           context.item.id,
@@ -250,7 +253,6 @@ export function DiffViewer(): ReactElement {
           Math.min(range.start, range.end),
           Math.max(range.start, range.end),
         );
-        queueMicrotask(() => ref.current?.clearSelectedLines());
       },
     }),
     [interdiff, theme, viewMode, wrapLines],
