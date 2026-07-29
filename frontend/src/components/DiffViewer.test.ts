@@ -10,4 +10,10 @@ describe("Diff review pointer gestures", () => {
     expect(source).not.toContain("enableLineSelection:");
     expect(source).not.toContain("onLineSelectionEnd:");
   });
+
+  test("uses Diffs' native GitHub-style context expansion", () => {
+    expect(source).toContain('hunkSeparators: "line-info"');
+    expect(source).toContain("expandUnchanged: false");
+    expect(source).toContain("expansionLineCount: 20");
+  });
 });
