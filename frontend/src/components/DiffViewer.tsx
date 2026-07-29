@@ -217,9 +217,11 @@ export function DiffViewer(): ReactElement {
       overflow: wrapLines ? "wrap" : "scroll",
       diffIndicators: "classic",
       lineDiffType: "word-alt",
-      hunkSeparators: "line-info-basic",
-      // Keep unchanged regions collapsed initially; Diffs' hunk controls can
-      // expand them incrementally without materializing an entire large file.
+      // Diffs' native line-info separator makes the collapsed line count and
+      // direction control clickable, matching GitHub's context expansion.
+      hunkSeparators: "line-info",
+      // Keep unchanged regions collapsed initially and reveal 20 lines per
+      // interaction without materializing an entire large file.
       expandUnchanged: false,
       expansionLineCount: 20,
       stickyHeaders: true,
