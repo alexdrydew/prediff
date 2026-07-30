@@ -1,6 +1,13 @@
 /** Small imperative bridge around @pierre/diffs' CodeView scroll API. */
 
-import { closeInterdiff, flashSearchHighlight, isExpanded, loadFileDiff, store } from "./store";
+import {
+  closeInterdiff,
+  flashSearchHighlight,
+  isExpanded,
+  loadFileDiff,
+  store,
+  toggleViewed,
+} from "./store";
 import type { SearchMatch, Side } from "../types";
 
 export interface DiffLocation {
@@ -53,6 +60,24 @@ export function scrollToLocation(location: DiffLocation, align: "start" | "cente
 
 export function scrollToTop(): void {
   diffController?.scrollToTop();
+}
+
+/**
+ * Collapse a newly viewed file, then anchor its header once React and CodeView
+ * have committed the shorter layout. Without the anchor, a viewport deep
+ * inside a large file is clamped to the new document bottom.
+ */
+export async function toggleViewedKeepingPosition(
+  path: string,
+  viewed?: boolean,
+): Promise<void> {
+  const next = viewed ?? !store.getState().viewedFiles.has(path);
+  const update = toggleViewed(path, viewed);
+  if (next) {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    diffController?.scrollToItem(path);
+  }
+  await update;
 }
 
 export function clearDiffSelection(): void {

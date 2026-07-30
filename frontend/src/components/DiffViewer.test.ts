@@ -16,4 +16,9 @@ describe("Diff review pointer gestures", () => {
     expect(source).toContain("expandUnchanged: false");
     expect(source).toContain("expansionLineCount: 20");
   });
+
+  test("reserves a viewport for anchoring files collapsed near the end", () => {
+    expect(source).toContain("paddingBottom: viewportHeight");
+    expect(source).toContain("containerRef={containerRef}");
+  });
 });

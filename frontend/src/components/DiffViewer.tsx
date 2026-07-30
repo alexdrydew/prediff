@@ -11,7 +11,8 @@ import type {
   OnLineClickProps,
   SelectedLineRange,
 } from "@pierre/diffs";
-import { useEffect, useMemo, useRef, type ReactElement } from "react";
+import { DEFAULT_CODE_VIEW_LAYOUT } from "@pierre/diffs";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import type { ManifestFile, ReviewComment, Side } from "../types";
 import { lineInDiff, pierreFileDiff } from "../lib/diffs";
 import { selectExpanded, selectOrderedFiles } from "../state/selectors";
@@ -23,7 +24,6 @@ import {
   shownRevision,
   store,
   toggleFile,
-  toggleViewed,
   useStore,
   type ComposerTarget,
   type FileDiffState,
@@ -31,6 +31,7 @@ import {
 import {
   noteActiveLine,
   registerDiffController,
+  toggleViewedKeepingPosition,
   type DiffLocation,
 } from "../state/controller";
 import { ViewedCheckbox } from "./ViewedCheckbox";
@@ -69,6 +70,10 @@ function itemVersion(id: string, signature: string): number {
 
 export function DiffViewer(): ReactElement {
   const ref = useRef<CodeViewHandle<Annotation>>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [viewportHeight, setViewportHeight] = useState(
+    DEFAULT_CODE_VIEW_LAYOUT.paddingBottom,
+  );
   const orderedFiles = useStore(selectOrderedFiles);
   const normalExpanded = useStore(selectExpanded);
   const fileDiffs = useStore((state) => state.fileDiffs);
@@ -82,6 +87,16 @@ export function DiffViewer(): ReactElement {
   const session = useStore((state) => state.session);
   const viewingRevision = useStore((state) => shownRevision(state));
   const searchHighlight = useStore((state) => state.searchHighlight);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const measure = () => setViewportHeight(container.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   const files = useMemo<ViewerFile[]>(() => {
     if (interdiff?.manifest) {
@@ -226,6 +241,12 @@ export function DiffViewer(): ReactElement {
       expansionLineCount: 20,
       stickyHeaders: true,
       pointerEventsOnScroll: true,
+      // Keep one viewport of virtual trailing space so a collapsed file near
+      // the end can still be anchored at the top instead of clamping to bottom.
+      layout: {
+        ...DEFAULT_CODE_VIEW_LAYOUT,
+        paddingBottom: viewportHeight,
+      },
       // CodeView reuses the placeholder header while an item lazily loads.
       // Prediff renders stable manifest counts in the metadata slot instead.
       unsafeCSS: "[data-additions-count],[data-deletions-count]{display:none}",
@@ -257,7 +278,7 @@ export function DiffViewer(): ReactElement {
         );
       },
     }),
-    [interdiff, theme, viewMode, wrapLines],
+    [interdiff, theme, viewMode, viewportHeight, wrapLines],
   );
 
   useEffect(() => {
@@ -298,6 +319,7 @@ export function DiffViewer(): ReactElement {
     <div className="diff-wrap pierre-diff-wrap">
       <CodeView<Annotation>
         ref={ref}
+        containerRef={containerRef}
         items={items}
         options={options}
         className="pierre-code-view"
@@ -384,7 +406,7 @@ function HeaderMetadata({ entry }: { entry: ViewerFile }): ReactElement {
           viewed={viewed}
           onClick={(event) => {
             event.stopPropagation();
-            void toggleViewed(entry.file.path);
+            void toggleViewedKeepingPosition(entry.file.path);
           }}
         />
       )}

@@ -10,7 +10,6 @@ import {
   setPanel,
   setViewMode,
   store,
-  toggleViewed,
   toggleWrapLines,
 } from "./store";
 import { selectOrderedFiles } from "./selectors";
@@ -20,6 +19,7 @@ import {
   focusFilter,
   scrollToLocation,
   scrollToPath,
+  toggleViewedKeepingPosition,
   type DiffLocation,
 } from "./controller";
 import type { FileDiff, Side } from "../types";
@@ -154,7 +154,9 @@ export function initKeyboard(): () => void {
         commentCurrent();
         break;
       case "v":
-        if (state.interdiff === null && state.activePath) void toggleViewed(state.activePath);
+        if (state.interdiff === null && state.activePath) {
+          void toggleViewedKeepingPosition(state.activePath);
+        }
         break;
       case "]":
         jumpLocation(1, unresolvedTargets());
