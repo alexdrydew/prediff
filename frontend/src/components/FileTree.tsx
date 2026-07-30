@@ -8,11 +8,14 @@ import {
   setTreeWidth,
   toggleDir,
   toggleFile,
-  toggleViewed,
   useStore,
   type InterdiffState,
 } from "../state/store";
-import { registerFilterInput, scrollToPath } from "../state/controller";
+import {
+  registerFilterInput,
+  scrollToPath,
+  toggleViewedKeepingPosition,
+} from "../state/controller";
 import { ViewedCheckbox } from "./ViewedCheckbox";
 
 const STATUS_IC: Record<FileStatus, { ch: string; cls: string }> = {
@@ -70,7 +73,7 @@ const FileItem = memo(function FileItem({
         viewed={item.viewed}
         onClick={(e) => {
           e.stopPropagation();
-          void toggleViewed(item.file.path);
+          void toggleViewedKeepingPosition(item.file.path);
         }}
       />
       <span className={`sb-ic ${ic.cls}`}>{ic.ch}</span>
