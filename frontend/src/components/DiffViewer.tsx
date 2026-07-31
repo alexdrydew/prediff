@@ -43,7 +43,7 @@ import { MetaRow, type MetaVariant } from "./rows/MetaRow";
 const REVIEW_ID = "\0review";
 
 type Annotation =
-  | { kind: "comment"; comment: ReviewComment; detached: boolean }
+  | { kind: "comment"; commentId: string; detached: boolean }
   | { kind: "composer"; target: ComposerTarget }
   | { kind: "review-composer" }
   | { kind: "meta"; path: string; variant: MetaVariant; message?: string; lines?: number };
@@ -139,7 +139,7 @@ export function DiffViewer(): ReactElement {
     if (reviewComments.length > 0 || reviewComposerOpen) {
       const annotations: LineAnnotation<Annotation>[] = reviewComments.map((comment) => ({
         lineNumber: 0,
-        metadata: { kind: "comment", comment, detached: false },
+        metadata: { kind: "comment", commentId: comment.id, detached: false },
       }));
       if (reviewComposerOpen) {
         annotations.push({ lineNumber: 0, metadata: { kind: "review-composer" } });
@@ -173,7 +173,11 @@ export function DiffViewer(): ReactElement {
         annotations.push({
           side: visible ? pierreSide(comment.side) : fileAnnotationSide(file),
           lineNumber: visible ? comment.line : 0,
-          metadata: { kind: "comment", comment, detached: !visible && comment.line > 0 },
+          metadata: {
+            kind: "comment",
+            commentId: comment.id,
+            detached: !visible && comment.line > 0,
+          },
         });
       }
       for (const target of fileComposers) {
@@ -417,7 +421,9 @@ function HeaderMetadata({ entry }: { entry: ViewerFile }): ReactElement {
 function AnnotationView({ annotation }: { annotation: Annotation }): ReactElement {
   switch (annotation.kind) {
     case "comment":
-      return <ThreadRow comment={annotation.comment} detached={annotation.detached} />;
+      return (
+        <CommentAnnotation commentId={annotation.commentId} detached={annotation.detached} />
+      );
     case "composer":
       return <ComposerRow target={annotation.target} />;
     case "review-composer":
@@ -432,6 +438,22 @@ function AnnotationView({ annotation }: { annotation: Annotation }): ReactElemen
         />
       );
   }
+}
+
+/**
+ * Comment text is deliberately read from the store inside the stable Diffs
+ * annotation portal. Re-versioning the whole CodeView item for each draft
+ * keystroke replaces the textarea and resets its focus/caret.
+ */
+function CommentAnnotation({
+  commentId,
+  detached,
+}: {
+  commentId: string;
+  detached: boolean;
+}): ReactElement | null {
+  const comment = useStore((state) => state.comments.find((item) => item.id === commentId));
+  return comment ? <ThreadRow comment={comment} detached={detached} /> : null;
 }
 
 function metaAnnotation(
@@ -460,16 +482,15 @@ function metaAnnotation(
 }
 
 function commentSignature(comment: ReviewComment): string {
+  // Only fields that can move/recreate an annotation belong in the CodeView
+  // item version. Content changes render through CommentAnnotation in place.
   return [
     comment.id,
     comment.state,
     comment.revision,
+    comment.side,
     comment.line,
     comment.end_line,
-    comment.text,
-    comment.tag ?? "",
-    comment.suggestion ?? "",
-    comment.replies.length,
   ].join(":");
 }
 
