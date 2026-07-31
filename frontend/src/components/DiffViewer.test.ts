@@ -21,4 +21,19 @@ describe("Diff review pointer gestures", () => {
     expect(source).toContain("paddingBottom: viewportHeight");
     expect(source).toContain("containerRef={containerRef}");
   });
+
+  test("updates draft content without replacing the Diffs annotation portal", () => {
+    expect(source).toContain("commentId: comment.id");
+    expect(source).toContain(
+      "state.comments.find((item) => item.id === commentId)",
+    );
+    const signature = source.match(
+      /function commentSignature[\s\S]*?return \[([\s\S]*?)\]\.join/,
+    )?.[1];
+    expect(signature).toBeDefined();
+    expect(signature).not.toContain("comment.text");
+    expect(signature).not.toContain("comment.tag");
+    expect(signature).not.toContain("comment.suggestion");
+    expect(signature).not.toContain("comment.replies");
+  });
 });
